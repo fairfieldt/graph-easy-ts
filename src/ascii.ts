@@ -56,6 +56,8 @@ interface AlignedLabel {
   aligns: AlignChar[];
 }
 
+let currentPreserveLabelWhitespace = false;
+
 function edgeStyleName(edge: Edge): string {
   const raw = edge.attribute("style").trim();
   return raw === "" ? "solid" : raw;
@@ -283,7 +285,7 @@ function alignedLabel(label: string, align: string, wrap: string): AlignedLabel 
     part = part.replace(/\\\\/g, "\\");
     part = part.replace(/^\s+/, "");
     part = part.replace(/\s+$/, "");
-    part = part.replace(/\s+/g, " ");
+    if (!currentPreserveLabelWhitespace) part = part.replace(/\s+/g, " ");
 
     // \n means "use default alignment" for the next line.
     const nextAlignRaw = esc === "n" ? defaultAlign : (esc as AlignChar);
@@ -1833,6 +1835,9 @@ function drawGroupCell(cell: GroupCell, fb: Fb, absX: number, absY: number): voi
 }
 
 export function renderAscii(graph: Graph): string {
+  const prevPreserveLabelWhitespace = currentPreserveLabelWhitespace;
+  currentPreserveLabelWhitespace = graph.preserveLabelWhitespace;
+  try {
   if (!graph.cells) graph.layout();
   const cells = graph.cells;
   if (!cells) throw new Error("renderAscii(): graph.layout() did not produce cells");
@@ -1881,6 +1886,9 @@ export function renderAscii(graph: Graph): string {
   const labelPosRaw = graph.graphAttributes.labelpos?.trim().toLowerCase() ?? "";
   const labelPos = labelPosRaw.startsWith("b") ? "bottom" : "top";
 
+  const labelAlignRaw = graph.graphAttributes.align?.trim().toLowerCase() ?? "";
+  const labelAlign = labelAlignRaw.startsWith("l") ? "left" : labelAlignRaw.startsWith("r") ? "right" : "center";
+
   const contentLines = out.replace(/\n$/, "").split("\n");
 
   if (labelPos === "bottom") {
@@ -1890,8 +1898,18 @@ export function renderAscii(graph: Graph): string {
 
     // Match Graph::Easy's centering bias: when the leftover width is odd, the
     // drawing is shifted one extra space to the right.
-    const contentPad = Math.max(0, Math.trunc((overallWidth - contentWidth + 1) / 2));
-    const labelPad = Math.max(0, Math.trunc((overallWidth - labelWidth) / 2));
+    const contentPad =
+      labelAlign === "left"
+        ? 0
+        : labelAlign === "right"
+          ? Math.max(0, overallWidth - contentWidth)
+          : Math.max(0, Math.trunc((overallWidth - contentWidth + 1) / 2));
+    const labelPad =
+      labelAlign === "left"
+        ? 0
+        : labelAlign === "right"
+          ? Math.max(0, overallWidth - labelWidth)
+          : Math.max(0, Math.trunc((overallWidth - labelWidth) / 2));
 
     const paddedContent = contentPad ? contentLines.map((l) => " ".repeat(contentPad) + l) : contentLines;
     const labelLine = " ".repeat(labelPad) + graphLabel;
@@ -1901,8 +1919,13 @@ export function renderAscii(graph: Graph): string {
 
   // Center relative to the framebuffer width (pre-trim), not the trimmed line lengths.
   const width = maxX;
-  const pad = Math.max(0, Math.trunc((width - graphLabel.length) / 2));
+  let pad = 0;
+  if (labelAlign === "right") pad = Math.max(0, width - graphLabel.length);
+  else if (labelAlign === "center") pad = Math.max(0, Math.trunc((width - graphLabel.length) / 2));
   const labelLine = " ".repeat(pad) + graphLabel;
 
   return ["", labelLine, "", ...contentLines].join("\n") + "\n";
+  } finally {
+    currentPreserveLabelWhitespace = prevPreserveLabelWhitespace;
+  }
 }
