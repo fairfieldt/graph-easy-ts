@@ -29,7 +29,30 @@ function skipWs(s: string, pos: number): number {
 
 function startsWithEdgeOp(s: string): boolean {
   // Edges start with characters like '-', '=', '.', '<', '>'
-  return /^[\-\.=<>]/.test(s);
+  return /^[\-\.=<>~]/.test(s);
+}
+
+function hasUnescapedPipe(s: string): boolean {
+  // Perl uses /[^\\]\|/ to detect autosplit; we treat any unescaped pipe as autosplit.
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "|" && (i === 0 || s[i - 1] !== "\\")) return true;
+  }
+  return false;
+}
+
+function unquoteName(name: string, noCollapse = false): string {
+  // Ported from Graph::Easy::Parser::_unquote.
+  let out = name;
+
+  // Unquote special chars (e.g. "\\[" => "[").
+  out = out.replace(/\\([\[\(\{\}\]\)\#<>\-\.\=])/g, "$1");
+
+  // Collapse multiple spaces.
+  if (!noCollapse) {
+    out = out.replace(/\s+/g, " ");
+  }
+
+  return out;
 }
 
 function isBalancedForLine(line: string): boolean {
@@ -205,6 +228,33 @@ class GraphEasyParser {
   private lastChainNode: Node | undefined;
   private pendingEdge: PendingEdge | undefined;
 
+  // Used to support comma-list fanout: "[A] --> [B], [C]".
+  private lastCreatedEdge: PendingEdge | undefined;
+
+  // Used to support list-attr fanout across lines, e.g.:
+  //   [ Bonn ], [ Berlin ]
+  //   -- test --> [ Frankfurt ]
+  // which should create Bonn->Frankfurt and Berlin->Frankfurt.
+  private lastNodeList: Node[] | undefined;
+
+  // Track the explicit attribute block parsed for the most recently parsed node.
+  // This is used to implement Graph::Easy list-attribute semantics for comma-separated
+  // target lists in edge statements (e.g. "--> [A]{x}, [B]{y}" applies merged attrs
+  // to both A and B).
+  private lastParsedNodeAttrs: Attributes | undefined;
+
+  // Track generated autosplit basenames so we can make them unique like Perl's
+  // Graph::Easy::Parser::_get_cluster_name.
+  private readonly clusters = new Set<string>();
+  private nextClusterId = 0;
+
+  // Track generated anonymous node ids (Perl Graph::Easy::Node::Anon).
+  private nextAnonId = 0;
+
+  private clearLastCreatedEdge(): void {
+    this.lastCreatedEdge = undefined;
+  }
+
   public parse(text: string): Graph {
     const rawLines = text.replace(/\r\n?/g, "\n").split("\n");
 
@@ -239,6 +289,38 @@ class GraphEasyParser {
         // block contain "{" characters (e.g. label text like "digraph G {").
         if (nextTrim === "}") break;
       }
+
+      // Allow node statements to have their attribute block on following lines:
+      //   [ A ]
+      //   {
+      //     ...
+      //   }
+      // Treat this as a single logical line so it parses like "[A] { ... }".
+      if (isBalancedForLine(line)) {
+        const trimmedEnd = line.trimEnd();
+        if (trimmedEnd.endsWith("]")) {
+          let j = i + 1;
+          while (j < rawLines.length) {
+            const t = rawLines[j].trim();
+            if (t === "" || t.startsWith("#")) {
+              j += 1;
+              continue;
+            }
+            break;
+          }
+          if (j < rawLines.length && rawLines[j].trim().startsWith("{")) {
+            i = j;
+            line += " " + rawLines[i].trim();
+
+            while (!isBalancedForLine(line) && i + 1 < rawLines.length) {
+              const nextTrim = rawLines[i + 1].trim();
+              i++;
+              line += " " + nextTrim;
+              if (nextTrim === "}") break;
+            }
+          }
+        }
+      }
       logicalLines.push(line);
     }
 
@@ -255,6 +337,241 @@ class GraphEasyParser {
     }
 
     return this.graph;
+  }
+
+  private getClusterName(base: string): string {
+    // Ported from Graph::Easy::Parser::_get_cluster_name.
+    // If the base is already used, append "-N" until unique.
+    let out = base;
+    if (this.clusters.has(out)) {
+      if (this.nextClusterId === 0) this.nextClusterId = 1;
+      while (true) {
+        const tryName = `${base}-${this.nextClusterId}`;
+        if (!this.clusters.has(tryName)) {
+          out = tryName;
+          this.nextClusterId += 1;
+          break;
+        }
+        this.nextClusterId += 1;
+      }
+    }
+
+    this.clusters.add(out);
+    return out;
+  }
+
+  private autosplitNodes(name: string, attrs?: Attributes): Node[] {
+    // Ported from Graph::Easy::Parser::_autosplit_node.
+    // Splits a node label like "a|b||c" into nodes "<basename>.0", "<basename>.1", ...
+
+    // build base name: "A|B |C||D" => "ABCD"
+    let baseName = name.replace(/\s*\|\|?\s*/g, "");
+
+    // use user-provided base name
+    const basenameOverride = attrs?.basename;
+    if (basenameOverride !== undefined) {
+      baseName = basenameOverride;
+    }
+
+    baseName = baseName.trim();
+    baseName = this.getClusterName(baseName);
+
+    const attrNoBasename: Attributes | undefined = attrs
+      ? (() => {
+          const copy: Attributes = Object.create(null);
+          for (const [k, v] of Object.entries(attrs)) {
+            if (k === "basename") continue;
+            copy[k] = v;
+          }
+          return copy;
+        })()
+      : undefined;
+
+    const splitAttrValue = (value: string): string[] => {
+      const out: string[] = [];
+      let cur = "";
+
+      for (let i = 0; i < value.length; i++) {
+        const ch = value[i];
+        if (ch === "\\" && i + 1 < value.length && value[i + 1] === "|") {
+          cur += "|";
+          i += 1;
+          continue;
+        }
+        if (ch === "|") {
+          out.push(cur);
+          cur = "";
+          continue;
+        }
+        cur += ch;
+      }
+      out.push(cur);
+      return out;
+    };
+
+    let firstInRow: Node | undefined;
+    let x = 0;
+    let y = 0;
+    let idx = 0;
+    let remaining = name;
+    let lastSep = "";
+    let add = 0;
+
+    const out: Node[] = [];
+
+    while (remaining !== "") {
+      // Regex-equivalent of: ^((\\\||[^\|])*)(\|\|?|\z)
+      let i = 0;
+      while (i < remaining.length) {
+        const ch = remaining[i];
+        if (ch === "|") break;
+        if (ch === "\\" && i + 1 < remaining.length && remaining[i + 1] === "|") {
+          i += 2;
+          continue;
+        }
+        i += 1;
+      }
+
+      const partRaw = remaining.slice(0, i);
+      const partWasEmpty = partRaw === "";
+
+      let sep = "";
+      let sepLen = 0;
+      if (i < remaining.length && remaining[i] === "|") {
+        if (i + 1 < remaining.length && remaining[i + 1] === "|") {
+          sep = "||";
+          sepLen = 2;
+        } else {
+          sep = "|";
+          sepLen = 1;
+        }
+      }
+
+      remaining = remaining.slice(i + sepLen);
+      const remainingAfterSep = remaining;
+
+      // Perl uses $1 || ' ' (empty parts become a single space).
+      let part = partWasEmpty ? " " : partRaw;
+
+      // fix [|G|] to have one empty part as last part
+      if (add === 0 && remaining === "" && (sep === "|" || sep === "||")) {
+        add += 1;
+        remaining += "|";
+      }
+
+      // Determine whether to create a borderless empty node or a bordered empty node.
+      // allow_empty defaults to true in Perl.
+      let isEmptyBorderless = false;
+      if (partWasEmpty) {
+        isEmptyBorderless = true;
+      } else if (/^[ ]+$/.test(part)) {
+        // Whitespace-only parts: Graph::Easy treats single-space parts at the beginning/end
+        // of a row as borderless spacers, but keeps a bordered empty cell for internal
+        // single-space parts (e.g. "2| |3").
+        if (partRaw.length === 1) {
+          const isRowStart = lastSep === "" || lastSep === "||";
+          const hasRightPart = remainingAfterSep !== "";
+          if (isRowStart || !hasRightPart) {
+            isEmptyBorderless = true;
+          } else {
+            part = " ";
+          }
+        } else {
+          // Explicit multi-space parts create an empty node *with* a border.
+          part = " ";
+        }
+      } else {
+        // strip spaces at front/end
+        part = part.trim();
+      }
+
+      const nodeId = `${baseName}.${idx}`;
+      const node = this.graph.addNode(nodeId);
+
+      // Apply node attributes to all parts (except basename).
+      // For autosplit nodes, Graph::Easy supports split values like:
+      //   border: dashed|;
+      //   color: red|blue;
+      // which apply per part in order; empty/missing parts inherit defaults.
+      if (attrNoBasename) {
+        const perPartAttrs: Attributes = Object.create(null);
+        for (const [k, v] of Object.entries(attrNoBasename)) {
+          // Relative-placement attributes apply to the autosplit cluster root only.
+          // Applying these to all parts and then overriding origins for internal
+          // parts can leave stale children links and break cluster placement.
+          if ((k === "origin" || k === "offset") && idx !== 0) {
+            continue;
+          }
+          if (hasUnescapedPipe(v)) {
+            const parts = splitAttrValue(v);
+            const partV = parts[idx];
+            if (partV !== undefined) {
+              const trimmed = partV.trim();
+              if (trimmed !== "") perPartAttrs[k] = trimmed;
+            }
+            continue;
+          }
+          perPartAttrs[k] = v;
+        }
+        if (Object.keys(perPartAttrs).length) {
+          node.setAttributes(perPartAttrs);
+        }
+      }
+
+      // For borderless empty cells, mirror Graph::Easy::Node::Empty.
+      if (isEmptyBorderless) {
+        node.setAttributes({ shape: "invisible" });
+      }
+
+      // Store display label (Graph::Easy uses autosplit_label).
+      node.label = part;
+
+      // Record autosplit metadata (useful for debugging / future parity).
+      node.setAttributes({ autosplit_basename: baseName, autosplit_xy: `${x},${y}` });
+
+      // Relative placement.
+      if (idx === 0) {
+        firstInRow = node;
+
+        // Mirror Perl: first part gets the basename attribute (only part 0).
+        if (basenameOverride !== undefined) {
+          node.setAttributes({ basename: basenameOverride });
+        }
+      } else {
+        let origin: Node | undefined = out[out.length - 1];
+        let sx = 1;
+        let sy = 0;
+        if (lastSep === "||") {
+          origin = firstInRow;
+          sx = 0;
+          sy = 1;
+          firstInRow = node;
+        }
+
+        if (!origin) {
+          throw new Error(`autosplitNodes: missing origin for ${nodeId}`);
+        }
+
+        node.origin = origin;
+        node.dx = sx;
+        node.dy = sy;
+
+        // Register relative placement relationship (Graph::Easy::Node->relative_to).
+        origin.children.set(node.id, node);
+      }
+
+      out.push(node);
+
+      idx += 1;
+      lastSep = sep;
+      x += 1;
+      if (sep === "||") {
+        x = 0;
+        y += 1;
+      }
+    }
+
+    return out;
   }
 
   private currentGroup(): Group | undefined {
@@ -284,6 +601,21 @@ class GraphEasyParser {
     if (!line) return;
     if (line.startsWith("#")) return;
 
+    // Cross-line list fanout applies only to the *immediately following* logical line.
+    // Capture+clear it up-front so it can't leak further.
+    let listEdgeSources: Node[] | undefined = undefined;
+    if (startsWithEdgeOp(line)) {
+      listEdgeSources = this.lastNodeList;
+
+      // Perl Graph::Easy appears to treat edge-leading continuations after a node list
+      // as continuing from the *first* node in that list (which also affects edge
+      // creation ordering and layout decisions). Mirror that here.
+      if (listEdgeSources && listEdgeSources.length > 0) {
+        this.lastChainNode = listEdgeSources[0];
+      }
+    }
+    this.lastNodeList = undefined;
+
     // When an edge operator is pending (line ended with an edge), a standalone
     // attribute block applies to that edge.
     if (this.pendingEdge && line.startsWith("{") && line.endsWith("}")) {
@@ -305,9 +637,167 @@ class GraphEasyParser {
     // Split multiple statements on a single line: "a, b".
     const commaParts = splitTopLevel(line, ",");
 
+    const isNodeStatementOnly = (part: string): boolean => {
+      const p0 = part.trim();
+      if (!p0.startsWith("[")) return false;
+
+      try {
+        const sq = parseSquareBlock(p0, 0);
+        let p = skipWs(p0, sq.nextPos);
+        if (p < p0.length && p0[p] === "{") {
+          const blk = parseCurlyBlock(p0, p);
+          p = skipWs(p0, blk.nextPos);
+        }
+        return p === p0.length;
+      } catch {
+        return false;
+      }
+    };
+
+    // Perl Graph::Easy list-attribute semantics:
+    // For a comma-separated list of *node statements* on a single logical line,
+    // merge all attribute blocks left-to-right and apply the merged attributes
+    // to every node in the list.
+    if (!this.pendingEdge && commaParts.length > 1) {
+      const nodeParts: string[] = [];
+      const mergedAttrs: Attributes = {};
+      let allNodeStatements = true;
+
+      for (const partRaw of commaParts) {
+        const part = partRaw.trim();
+        if (!part) continue;
+        nodeParts.push(part);
+
+        if (!part.startsWith("[")) {
+          allNodeStatements = false;
+          break;
+        }
+
+        try {
+          const sq = parseSquareBlock(part, 0);
+          let p = skipWs(part, sq.nextPos);
+
+          if (p < part.length && part[p] === "{") {
+            const blk = parseCurlyBlock(part, p);
+            Object.assign(mergedAttrs, parseAttributesBlock(blk.blockText));
+            p = skipWs(part, blk.nextPos);
+          }
+
+          if (p !== part.length) {
+            allNodeStatements = false;
+            break;
+          }
+        } catch {
+          allNodeStatements = false;
+          break;
+        }
+      }
+
+      if (allNodeStatements && nodeParts.length > 1) {
+        const nodes: Node[] = [];
+        for (const part of nodeParts) {
+          const consumed = this.parseChainStatement(part);
+          if (consumed !== part.length) {
+            throw new Error(`Unexpected trailing content after node list item: ${part}`);
+          }
+          if (this.lastChainNode) nodes.push(this.lastChainNode);
+        }
+
+        if (Object.keys(mergedAttrs).length) {
+          for (const n of nodes) n.setAttributes(mergedAttrs);
+        }
+
+        // Remember this list for a possible following edge-leading statement.
+        this.lastNodeList = nodes;
+        return;
+      }
+    }
+
+    let commaEdgeList: PendingEdge | undefined;
+    let commaSourceNodes: Node[] = [];
+    let commaFanoutSources: Node[] | undefined;
+
+    // Track comma-separated edge target list so we can apply Graph::Easy list-attribute
+    // semantics across all targets in the list.
+    let commaTargetNodes: Node[] = [];
+    let commaTargetMergedAttrs: Attributes | undefined;
+
     for (const partRaw of commaParts) {
       let part = partRaw.trim();
       if (!part) continue;
+
+      // Comma-list fanout: "[ A ] --> { ... } [ B ], [ C ]" should create edges
+      // A->B and A->C with the same edge spec/attrs.
+      if (commaEdgeList && isNodeStatementOnly(part)) {
+        const n = this.parseNodeAt(part, 0);
+        const to = n.node;
+
+        // Apply list-attribute semantics for comma-separated targets:
+        // - each target inherits merged attrs from prior targets
+        // - attrs from this target apply to all previously parsed targets
+        const ownAttrs = n.attrs;
+        if (commaTargetMergedAttrs && Object.keys(commaTargetMergedAttrs).length > 0) {
+          to.setAttributes(commaTargetMergedAttrs);
+          // Restore the node's own attrs as the strongest (rightmost) overrides.
+          if (ownAttrs) to.setAttributes(ownAttrs);
+        }
+        if (ownAttrs) {
+          for (const prev of commaTargetNodes) {
+            prev.setAttributes(ownAttrs);
+          }
+        }
+        if (ownAttrs) {
+          if (!commaTargetMergedAttrs) commaTargetMergedAttrs = {};
+          Object.assign(commaTargetMergedAttrs, ownAttrs);
+        }
+        commaTargetNodes.push(to);
+
+        const edge = this.graph.addEdge(
+          commaEdgeList.from,
+          to,
+          commaEdgeList.leftOp,
+          commaEdgeList.rightOp,
+          commaEdgeList.label
+        );
+        if (commaEdgeList.attrs) edge.setAttributes(commaEdgeList.attrs);
+
+        // If we fanned out sources for the first target (cross-line list fanout or
+        // comma-separated source fanout), apply the same fanout to additional comma
+        // targets so we get the full cross product (e.g. Bonn/Berlin -> Frankfurt/(Oder)).
+        if (commaFanoutSources && commaFanoutSources.length > 0) {
+          for (const srcNode of commaFanoutSources) {
+            if (srcNode === commaEdgeList.from) continue;
+            const e = this.graph.addEdge(
+              srcNode,
+              to,
+              commaEdgeList.leftOp,
+              commaEdgeList.rightOp,
+              commaEdgeList.label
+            );
+            if (commaEdgeList.attrs) e.setAttributes(commaEdgeList.attrs);
+          }
+        }
+        this.lastChainNode = to;
+        this.lastParsedNodeAttrs = ownAttrs;
+        continue;
+      }
+
+      commaEdgeList = undefined;
+      commaFanoutSources = undefined;
+      commaTargetNodes = [];
+      commaTargetMergedAttrs = undefined;
+      this.clearLastCreatedEdge();
+
+      // Comma-list source fanout: "[ A ], [ B ] --> { ... } [ C ]" should create edges
+      // A->C and B->C with the same edge spec/attrs.
+      if (!this.pendingEdge && commaParts.length > 1 && isNodeStatementOnly(part)) {
+        const consumed = this.parseChainStatement(part);
+        if (consumed !== part.length) {
+          throw new Error(`Unexpected trailing content after node list item: ${part}`);
+        }
+        if (this.lastChainNode) commaSourceNodes.push(this.lastChainNode);
+        continue;
+      }
 
       // Handle multi-line group start/end syntax (block groups)
       if (part.startsWith("(") && !part.includes(")")) {
@@ -338,6 +828,7 @@ class GraphEasyParser {
         const trimmed = part.trimStart();
         const nodeRes = this.parseNodeAt(trimmed, 0);
         const to = nodeRes.node;
+        this.lastParsedNodeAttrs = nodeRes.attrs;
         const edge = this.graph.addEdge(
           this.pendingEdge.from,
           to,
@@ -355,6 +846,8 @@ class GraphEasyParser {
         part = part.trim();
         if (!part) continue;
       }
+
+      const edgesBefore = this.graph.edges.length;
 
       // Parse one or more chain statements from the remaining text.
       while (part.length) {
@@ -382,6 +875,36 @@ class GraphEasyParser {
         const consumed = this.parseChainStatement(part);
         part = part.slice(consumed).trim();
       }
+
+      const edgesCreated = this.graph.edges.length - edgesBefore;
+      const fanoutSources = commaSourceNodes.length > 0 ? commaSourceNodes : listEdgeSources;
+      if (fanoutSources && fanoutSources.length > 0 && edgesCreated === 1 && this.lastCreatedEdge) {
+        const base = this.lastCreatedEdge;
+        const createdEdge = this.graph.edges[this.graph.edges.length - 1];
+
+        // Persist these sources for any additional comma targets in this edge list.
+        commaFanoutSources = fanoutSources;
+
+        for (const srcNode of fanoutSources) {
+          if (srcNode === base.from) continue;
+          const e = this.graph.addEdge(srcNode, createdEdge.to, base.leftOp, base.rightOp, base.label);
+          if (base.attrs) e.setAttributes(base.attrs);
+        }
+      }
+
+      // Initialize comma-target list state for this edge list (so subsequent comma
+      // parts like ", [C]{...}" can apply list-attribute semantics).
+      if (edgesCreated === 1 && this.lastCreatedEdge && this.lastChainNode) {
+        commaTargetNodes = [this.lastChainNode];
+        commaTargetMergedAttrs = this.lastParsedNodeAttrs ? { ...this.lastParsedNodeAttrs } : undefined;
+      } else {
+        commaTargetNodes = [];
+        commaTargetMergedAttrs = undefined;
+      }
+      commaSourceNodes = [];
+      listEdgeSources = undefined;
+
+      commaEdgeList = this.lastCreatedEdge;
     }
   }
 
@@ -452,23 +975,62 @@ class GraphEasyParser {
     return false;
   }
 
-  private parseNodeAt(s: string, pos: number): { node: Node; nextPos: number } {
+  private parseNodeAt(s: string, pos: number): {
+    node: Node;
+    edgeNodes: Node[];
+    nextPos: number;
+    attrs?: Attributes;
+  } {
     const sq = parseSquareBlock(s, pos);
-    const label = sq.blockText.trim();
-    const node = this.graph.addNode(label);
+    const rawName = sq.blockText;
+    const name = unquoteName(rawName, true);
+
+    let p = sq.nextPos;
+    p = skipWs(s, p);
+
+    let attrs: Attributes | undefined;
+    if (p < s.length && s[p] === "{") {
+      const blk = parseCurlyBlock(s, p);
+      attrs = parseAttributesBlock(blk.blockText);
+      p = blk.nextPos;
+    }
+
+    // Autosplit nodes (record-like) if they contain an unescaped pipe.
+    if (hasUnescapedPipe(name)) {
+      const parts = this.autosplitNodes(name, attrs);
+      const group = this.currentGroup();
+      if (group) {
+        for (const n of parts) group.addNode(n);
+      }
+      return { node: parts[0], edgeNodes: parts, nextPos: p, attrs };
+    }
+
+    // Ported from Graph::Easy::Parser::_new_node normalization.
+    let label = name.trim();
+    label = label.replace(/\s+/g, " ");
+    label = label.replace(/\\\|/g, "|");
+
+    let node: Node;
+    if (label === "") {
+      // Perl Graph::Easy::Node::Anon: an anonymous, invisible node.
+      let id: string;
+      do {
+        id = `#${this.nextAnonId++}`;
+      } while (this.graph.node(id));
+
+      node = this.graph.addNode(id);
+      node.label = " ";
+      node.setAttributes({ shape: "invisible" });
+    } else {
+      node = this.graph.addNode(label);
+    }
+
+    if (attrs) node.setAttributes(attrs);
 
     const group = this.currentGroup();
     if (group) group.addNode(node);
 
-    let p = sq.nextPos;
-    p = skipWs(s, p);
-    if (p < s.length && s[p] === "{") {
-      const blk = parseCurlyBlock(s, p);
-      node.setAttributes(parseAttributesBlock(blk.blockText));
-      p = blk.nextPos;
-    }
-
-    return { node, nextPos: p };
+    return { node, edgeNodes: [node], nextPos: p, attrs };
   }
 
   private parseGroupAt(s: string, pos: number): { repNode?: Node; nextPos: number } {
@@ -526,6 +1088,111 @@ class GraphEasyParser {
   } {
     let attrs: Attributes | undefined;
 
+    // Graph::Easy operators include variations like "-->" ".->" "= >" "- >" and also "~~>".
+    const isOpChar = (ch: string): boolean => /[<>\-=.~]/.test(ch);
+    const isWs = (ch: string): boolean => ch === " " || ch === "\t";
+
+    const readOpForward = (
+      text: string,
+      pos: number,
+    ): { op: string; nextPos: number } | undefined => {
+      if (pos >= text.length) return undefined;
+      if (!isOpChar(text[pos])) return undefined;
+
+      let i = pos;
+      while (i < text.length) {
+        const ch = text[i];
+        if (isOpChar(ch)) {
+          i++;
+          continue;
+        }
+
+        if (isWs(ch)) {
+          let j = i;
+          while (j < text.length && isWs(text[j])) j++;
+          if (j < text.length && isOpChar(text[j])) {
+            // Whitespace that connects operator chunks is part of the operator token
+            // (e.g. "- >" or "= >").
+            i = j;
+            continue;
+          }
+        }
+
+        break;
+      }
+
+      return { op: text.slice(pos, i), nextPos: i };
+    };
+
+    const readOpBackward = (
+      text: string,
+      endPos: number,
+    ): { op: string; startPos: number } | undefined => {
+      if (endPos <= 0) return undefined;
+
+      let p = endPos - 1;
+      while (p >= 0 && isWs(text[p])) p--;
+      if (p < 0) return undefined;
+      if (!isOpChar(text[p])) return undefined;
+
+      while (p >= 0) {
+        const ch = text[p];
+        if (isOpChar(ch)) {
+          p--;
+          continue;
+        }
+
+        if (isWs(ch)) {
+          let q = p;
+          while (q >= 0 && isWs(text[q])) q--;
+          if (q >= 0 && isOpChar(text[q])) {
+            // Whitespace that connects operator chunks is part of the operator token.
+            p = q;
+            continue;
+          }
+        }
+
+        break;
+      }
+
+      const startPos = p + 1;
+      return { op: text.slice(startPos, endPos), startPos };
+    };
+
+    const parseOpAndLabel = (
+      rawText: string,
+    ): { leftOp: string; rightOp: string; label: string } => {
+      const text = rawText.trim();
+      if (!text) {
+        throw new Error(`Missing edge operator in: ${s.slice(start, end)}`);
+      }
+
+      const left = readOpForward(text, 0);
+      if (!left) {
+        throw new Error(`Missing edge operator in: ${s.slice(start, end)}`);
+      }
+
+      if (left.nextPos >= text.length) {
+        return { leftOp: text, rightOp: text, label: "" };
+      }
+
+      const right = readOpBackward(text, text.length);
+      if (!right) {
+        throw new Error(`Missing edge operator in: ${s.slice(start, end)}`);
+      }
+
+      if (right.startPos <= left.nextPos) {
+        return { leftOp: text, rightOp: text, label: "" };
+      }
+
+      const label = text.slice(left.nextPos, right.startPos).trim();
+      if (!label) {
+        return { leftOp: text, rightOp: text, label: "" };
+      }
+
+      return { leftOp: left.op, rightOp: right.op, label };
+    };
+
     // Look for an attribute block inside the edge spec (usually at the end).
     let specEnd = end;
     let i = start;
@@ -538,49 +1205,13 @@ class GraphEasyParser {
         // We assume a single attribute block per edge spec.
         const before = s.slice(start, i);
         const after = s.slice(blk.nextPos, specEnd);
-        const text = (before + " " + after).trim();
-        const parts = text.split(/\s+/).filter(Boolean);
-        if (parts.length === 0) {
-          throw new Error(`Missing edge operator in: ${s.slice(start, end)}`);
-        }
-
-        let leftOp: string;
-        let rightOp: string;
-        let label: string;
-        if (parts.length === 1) {
-          leftOp = parts[0];
-          rightOp = parts[0];
-          label = "";
-        } else {
-          leftOp = parts[0];
-          rightOp = parts[parts.length - 1];
-          label = parts.slice(1, -1).join(" ");
-        }
-
+        const { leftOp, rightOp, label } = parseOpAndLabel(before + " " + after);
         return { leftOp, rightOp, label, attrs, nextPos: blk.nextPos };
       }
       i++;
     }
 
-    const text = s.slice(start, end).trim();
-    const parts = text.split(/\s+/).filter(Boolean);
-    if (parts.length === 0) {
-      throw new Error(`Missing edge operator in: ${s.slice(start, end)}`);
-    }
-
-    let leftOp: string;
-    let rightOp: string;
-    let label: string;
-    if (parts.length === 1) {
-      leftOp = parts[0];
-      rightOp = parts[0];
-      label = "";
-    } else {
-      leftOp = parts[0];
-      rightOp = parts[parts.length - 1];
-      label = parts.slice(1, -1).join(" ");
-    }
-
+    const { leftOp, rightOp, label } = parseOpAndLabel(s.slice(start, end));
     return { leftOp, rightOp, label, nextPos: end };
   }
 
@@ -619,23 +1250,30 @@ class GraphEasyParser {
     // - a group ((...))
     // - an edge op (continuation from previous node)
     let current: Node | undefined;
+    let currentEdgeNodes: Node[] = [];
 
     if (text[pos] === "[") {
       const n = this.parseNodeAt(text, pos);
       current = n.node;
+      currentEdgeNodes = n.edgeNodes;
+      this.lastParsedNodeAttrs = n.attrs;
       pos = n.nextPos;
       this.lastChainNode = current;
     } else if (text[pos] === "(") {
       // Inline group expression.
       const g = this.parseGroupAt(text, pos);
       current = g.repNode;
+      currentEdgeNodes = current ? [current] : [];
       pos = g.nextPos;
       if (current) this.lastChainNode = current;
+      this.lastParsedNodeAttrs = undefined;
     } else if (startsWithEdgeOp(text.slice(pos))) {
       if (!this.lastChainNode) {
         throw new Error(`Edge continuation without a previous node: ${text}`);
       }
       current = this.lastChainNode;
+      currentEdgeNodes = [current];
+      this.lastParsedNodeAttrs = undefined;
       // Do not advance pos here; we still need to read the edge spec.
     } else {
       throw new Error(`Unsupported statement: ${text}`);
@@ -672,25 +1310,39 @@ class GraphEasyParser {
 
       // Parse the next element.
       let toNode: Node | undefined;
+      let toEdgeNodes: Node[] = [];
       let nextPos: number;
       if (text[nextEl] === "[") {
         const n = this.parseNodeAt(text, nextEl);
         toNode = n.node;
+        toEdgeNodes = n.edgeNodes;
+        this.lastParsedNodeAttrs = n.attrs;
         nextPos = n.nextPos;
       } else {
         const g = this.parseGroupAt(text, nextEl);
         toNode = g.repNode;
+        toEdgeNodes = toNode ? [toNode] : [];
+        this.lastParsedNodeAttrs = undefined;
         nextPos = g.nextPos;
       }
 
       // Create edge if we have endpoints.
-      let created: Edge | undefined;
-      if (current && toNode) {
-        created = this.graph.addEdge(current, toNode, leftOp, rightOp, label);
-        if (edgeSpec.attrs) created.setAttributes(edgeSpec.attrs);
+      if (currentEdgeNodes.length && toEdgeNodes.length) {
+        let setLast = false;
+        for (const fromNode of currentEdgeNodes) {
+          for (const to of toEdgeNodes) {
+            const created = this.graph.addEdge(fromNode, to, leftOp, rightOp, label);
+            if (edgeSpec.attrs) created.setAttributes(edgeSpec.attrs);
+            if (!setLast) {
+              this.lastCreatedEdge = { from: fromNode, leftOp, rightOp, label, attrs: edgeSpec.attrs };
+              setLast = true;
+            }
+          }
+        }
       }
 
       current = toNode;
+      currentEdgeNodes = toEdgeNodes;
       if (current) this.lastChainNode = current;
       pos = nextPos;
     }

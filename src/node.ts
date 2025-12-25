@@ -9,26 +9,130 @@ import type { LayoutChain } from "./layout/chain";
 
 export type FlowDirection = 0 | 90 | 180 | 270;
 
-function directionAsNumber(dir: string): FlowDirection | undefined {
-  const v = dir.trim().toLowerCase();
-  if (v === "0" || v === "90" || v === "180" || v === "270") return Number(v) as FlowDirection;
+// Flow helpers ported from Graph::Easy 0.76.
 
-  // Absolute directions.
-  if (v === "east" || v === "right" || v === "forward" || v === "front") return 90;
-  if (v === "west" || v === "left" || v === "back") return 270;
-  if (v === "north" || v === "up") return 0;
-  if (v === "south" || v === "down") return 180;
+const FLOW_MODIFIER: Record<string, number> = {
+  forward: 0,
+  front: 0,
+  left: -90,
+  right: +90,
+  back: +180,
+};
 
-  return undefined;
+const DIRS: Record<string, FlowDirection> = {
+  up: 0,
+  north: 0,
+  down: 180,
+  south: 180,
+  west: 270,
+  east: 90,
+  "0": 0,
+  "90": 90,
+  "180": 180,
+  "270": 270,
+};
+
+// For determining absolute parent flow (Graph::Easy->flow / Node::_parent_flow_absolute).
+const PARENT_FLOW: Record<string, FlowDirection> = {
+  east: 90,
+  west: 270,
+  north: 0,
+  south: 180,
+  up: 0,
+  down: 180,
+  back: 270,
+  left: 270,
+  right: 90,
+  front: 90,
+  forward: 90,
+};
+
+function flowAsDirection(inflow: FlowDirection, dir: string): FlowDirection {
+  // Ported from Graph::Easy::Attributes::_flow_as_direction.
+  const d = dir.trim().toLowerCase();
+
+  if (/^(south|north|west|east|up|down|0|90|180|270)$/.test(d)) {
+    return DIRS[d];
+  }
+
+  const input = DIRS[String(inflow)];
+  const modifier = FLOW_MODIFIER[d];
+
+  if (input === undefined) {
+    throw new Error(`flowAsDirection: ${String(inflow)},${dir} results in undefined inflow`);
+  }
+  if (modifier === undefined) {
+    throw new Error(`flowAsDirection: ${String(inflow)},${dir} results in undefined modifier`);
+  }
+
+  let out = input + modifier;
+  while (out >= 360) out -= 360;
+  while (out < 0) out += 360;
+  return out as FlowDirection;
 }
 
 export class Node {
   public readonly attributes: Attributes = Object.create(null);
 
+  // Internal numeric node ID (Graph::Easy::Node->{id}). This is assigned by the
+  // Graph at node creation time and is used for deterministic ordering in
+  // predecessors()/successors() via ord_values().
+  public readonly numericId: number;
+
   public graph: Graph | undefined;
   public group: Group | undefined;
 
   public readonly edgesById = new Map<number, Edge>();
+
+  // For autosplit nodes, `origin` points to the original (parent) node.
+  // (Graph::Easy::Node uses this to order chain tracking.)
+  public origin: Node | undefined;
+
+  // Relative placement offset from `origin` (Graph::Easy::Node->{dx}/{dy}).
+  public dx = 0;
+  public dy = 0;
+
+  // Relative-placement children (Graph::Easy::Node->{children}).
+  public readonly children = new Map<string, Node>();
+
+  public findGrandparent(): Node {
+    // Ported from Graph::Easy::Node->find_grandparent.
+    // For a node that has no origin, returns itself. Otherwise follows the
+    // origin chain until we hit a node without an origin.
+    let cur: Node = this;
+    const seen = new Set<Node>();
+    while (cur.origin && cur.origin !== cur) {
+      if (seen.has(cur.origin)) {
+        throw new Error(`Detected loop in origin chain starting at '${this.id}'`);
+      }
+      seen.add(cur.origin);
+      cur = cur.origin;
+    }
+    return cur;
+  }
+
+  public findGrandparentWithOffset(): [Node, number, number] {
+    // Ported from Graph::Easy::Node->find_grandparent in list context.
+    // Returns: [grandparent, ox, oy] where (ox,oy) are the offsets to add to the
+    // current node's requested placement to get the grandparent placement.
+    let cur: Node = this;
+    let ox = 0;
+    let oy = 0;
+    const seen = new Set<Node>();
+
+    while (cur.origin && cur.origin !== cur) {
+      if (seen.has(cur.origin)) {
+        throw new Error(`Detected loop in origin chain starting at '${this.id}'`);
+      }
+      seen.add(cur.origin);
+
+      ox -= cur.dx;
+      oy -= cur.dy;
+      cur = cur.origin;
+    }
+
+    return [cur, ox, oy];
+  }
 
   // Layout fields (grid cell coordinates)
   public x: number | undefined;
@@ -51,11 +155,75 @@ export class Node {
 
   public constructor(
     public readonly id: string,
-    public label: string
-  ) {}
+    public label: string,
+    numericId: number
+  ) {
+    this.numericId = numericId;
+  }
 
   public setAttributes(attrs: Attributes): void {
+    // Apply class attributes (Graph::Easy "node.<class> { ... }") before merging
+    // explicit node attributes so inline attrs win.
+    if (Object.prototype.hasOwnProperty.call(attrs, "class")) {
+      const raw = attrs.class?.trim() ?? "";
+      if (raw !== "" && this.graph) {
+        for (const cls of raw.split(/[\s,]+/).filter(Boolean)) {
+          const classAttrs = this.graph.nodeClassAttributes.get(cls.toLowerCase());
+          if (classAttrs) {
+            mergeAttributes(this.attributes, classAttrs);
+          }
+        }
+      }
+    }
+
     mergeAttributes(this.attributes, attrs);
+
+    // Ported from Graph::Easy::Node->set_attribute for relative placement.
+    // Note: Graph::Easy also stores these as attributes so attribute('origin')/
+    // attribute('offset') continue to work.
+    if (Object.prototype.hasOwnProperty.call(attrs, "origin")) {
+      const raw = attrs.origin?.trim() ?? "";
+      if (raw !== "") {
+        if (!this.graph) {
+          throw new Error(`Cannot resolve origin '${raw}' for node '${this.id}' without graph`);
+        }
+        const parent = this.graph.addNode(raw);
+
+        // Unregister with the old origin.
+        if (this.origin) {
+          this.origin.children.delete(this.id);
+        }
+
+        // Detect loops in origin-chain: forbid setting origin to our own grandchild.
+        const grandpa = parent.findGrandparent();
+        if (grandpa === this) {
+          throw new Error(
+            `Detected loop in origin-chain: tried to set origin of '${this.id}' to my own grandchild '${parent.id}'`
+          );
+        }
+
+        this.origin = parent;
+        parent.children.set(this.id, this);
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(attrs, "offset")) {
+      const raw = attrs.offset?.trim() ?? "";
+      if (raw !== "") {
+        const [xRaw, yRaw] = raw.split(/\s*,\s*/);
+        const x = Math.trunc(Number(xRaw));
+        const y = Math.trunc(Number(yRaw));
+        if (x === 0 && y === 0) {
+          throw new Error(`Error in attribute: 'offset' is 0,0 in node ${this.id}`);
+        }
+
+        this.dx = x;
+        this.dy = y;
+
+        // Normalize the stored attribute value.
+        this.attributes.offset = `${this.dx},${this.dy}`;
+      }
+    }
   }
 
   public rawAttribute(key: string): string | undefined {
@@ -63,7 +231,71 @@ export class Node {
   }
 
   public attribute(key: string): string {
-    return this.attributes[key] ?? "";
+    const own = this.attributes[key];
+    if (own !== undefined) return own;
+
+    // Graph::Easy uses graph-level textwrap as the default for node/edge labels.
+    if (key === "textwrap") {
+      return this.graph?.graphAttributes.textwrap ?? "";
+    }
+
+    return "";
+  }
+
+  private resolvedAttribute(key: string): string {
+    const norm = (v: string): string => v.trim().toLowerCase();
+
+    const own = this.rawAttribute(key);
+    if (own !== undefined && norm(own) !== "" && norm(own) !== "inherit") return own;
+
+    let g = this.group;
+    while (g) {
+      const gv = g.rawAttribute(key);
+      if (gv !== undefined && norm(gv) !== "" && norm(gv) !== "inherit") return gv;
+      g = g.parent;
+    }
+
+    const graphV = this.graph?.graphAttributes[key];
+    if (graphV !== undefined && norm(graphV) !== "" && norm(graphV) !== "inherit") return graphV;
+
+    return "";
+  }
+
+  public labelText(): string {
+    // Ported from Graph::Easy::Node->label.
+    // - Prefer explicit { label: ... } attribute (including class-applied labels).
+    // - For autosplit nodes, the parser stores the part label in `node.label`.
+    // - Fall back to the node name.
+    // - Apply autolabel shortening (ASCII uses " ... ").
+
+    let out: string | undefined = this.rawAttribute("label");
+    if (out === undefined) out = this.label;
+    if (out === undefined) out = this.id;
+    if (out === undefined) return "";
+
+    if (out !== "") {
+      const lenRaw0 = this.resolvedAttribute("autolabel");
+      if (lenRaw0 !== "") {
+        let lenRaw = lenRaw0.trim();
+        // Allow legacy format "name,12".
+        lenRaw = lenRaw.replace(/^name\s*,\s*/i, "");
+
+        let len = Math.abs(Number(lenRaw) || 0);
+        if (len > 99999) len = 99999;
+
+        if (out.length > len) {
+          let keep = Math.trunc(len / 2) - 3;
+          if (keep < 0) keep = 0;
+          if (keep === 0) {
+            out = " ... ";
+          } else {
+            out = out.slice(0, keep) + " ... " + out.slice(out.length - keep);
+          }
+        }
+      }
+    }
+
+    return out;
   }
 
   public addEdge(edge: Edge): void {
@@ -71,31 +303,46 @@ export class Node {
   }
 
   public edges(): Edge[] {
-    return [...this.edgesById.values()].sort((a, b) => a.id - b.id);
+    // Graph::Easy uses ord_values() (lexicographic key order), so keep this as a
+    // codepoint string compare rather than numeric sort.
+    return [...this.edgesById.values()].sort((a, b) => {
+      const ak = String(a.id);
+      const bk = String(b.id);
+      return ak < bk ? -1 : ak > bk ? 1 : 0;
+    });
   }
 
   public predecessors(): Node[] {
-    const seen = new Set<Node>();
+    // Ported from Graph::Easy::Node->predecessors.
+    // Perl keys predecessors by the numeric node id and returns ord_values(%pre),
+    // i.e. values ordered by lexicographic key.
+    const pre = new Map<string, Node>();
     for (const e of this.edges()) {
-      if (e.to === this) {
-        seen.add(e.from);
-      } else if (e.bidirectional && e.from === this) {
-        seen.add(e.to);
-      }
+      // Graph::Easy::Node::predecessors only considers edges where this node is
+      // the 'to' endpoint (even for bidirectional edges).
+      if (e.to !== this) continue;
+      pre.set(String(e.from.numericId), e.from);
     }
-    return [...seen].sort((a, b) => a.id.localeCompare(b.id));
+
+    return [...pre.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([, n]) => n);
   }
 
   public successors(): Node[] {
-    const seen = new Set<Node>();
+    // Ported from Graph::Easy::Node->successors.
+    // Like predecessors(), this is ordered by the numeric node id (lexicographic).
+    const suc = new Map<string, Node>();
     for (const e of this.edges()) {
-      if (e.from === this) {
-        seen.add(e.to);
-      } else if (e.bidirectional && e.to === this) {
-        seen.add(e.from);
-      }
+      // Graph::Easy::Node::successors only considers edges where this node is
+      // the 'from' endpoint (even for bidirectional edges).
+      if (e.from !== this) continue;
+      suc.set(String(e.to.numericId), e.to);
     }
-    return [...seen].sort((a, b) => a.id.localeCompare(b.id));
+
+    return [...suc.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([, n]) => n);
   }
 
   public hasPredecessors(): number {
@@ -103,20 +350,119 @@ export class Node {
   }
 
   public flow(): FlowDirection {
-    const own = this.attribute("flow");
-    if (own && own !== "inherit") {
-      const n = directionAsNumber(own);
-      if (n !== undefined) return n;
+    // Ported from Graph::Easy::Node->flow (Graph-Easy 0.76).
+    if ("flow" in this.cache) return this.cache.flow as FlowDirection;
+
+    // Detected cycle, so break it.
+    if ("_flow" in this.cache) {
+      const fallback = this.parentFlowAbsolute(90) ?? 90;
+      this.cache.flow = fallback;
+      return fallback;
     }
 
-    const graphFlow = this.graph?.graphAttributes.flow;
-    if (graphFlow) {
-      const n = directionAsNumber(graphFlow);
-      if (n !== undefined) return n;
+    this.cache._flow = true;
+    try {
+      const norm = (s: string): string => s.trim().toLowerCase();
+
+      let flowToken = this.rawAttribute("flow");
+      flowToken = flowToken !== undefined ? flowToken.trim() : undefined;
+      if (flowToken === "") flowToken = undefined;
+
+      if (flowToken === undefined || norm(flowToken) === "inherit") {
+        const parentAbs = this.parentFlowAbsolute();
+        if (parentAbs !== undefined) {
+          this.cache.flow = parentAbs;
+          return parentAbs;
+        }
+        flowToken = undefined;
+      }
+
+      // If flow is absolute, return it early.
+      if (flowToken !== undefined) {
+        const v = norm(flowToken);
+        if (v === "0" || v === "90" || v === "180" || v === "270") {
+          const out = Number(v) as FlowDirection;
+          this.cache.flow = out;
+          return out;
+        }
+
+        if (/^(south|north|east|west|up|down)$/.test(v)) {
+          const out = DIRS[v];
+          this.cache.flow = out;
+          return out;
+        }
+
+        flowToken = v;
+      }
+
+      // For relative flows, compute the incoming flow as base flow.
+
+      let inflow: FlowDirection | undefined;
+
+      // Check all incoming edges.
+      for (const e of this.edges()) {
+        if (e.from === this) continue;
+        if (e.to !== this) continue;
+        inflow = e.flow();
+        break;
+      }
+
+      if (inflow === undefined) {
+        // Check all predecessors.
+        for (const e of this.edges()) {
+          const pre = e.bidirectional ? e.to : e.from;
+          if (pre !== this) {
+            inflow = pre.flow();
+            break;
+          }
+        }
+      }
+
+      inflow ??= this.parentFlowAbsolute(90) ?? 90;
+
+      // If we didn't have an explicit flow, default to the incoming.
+      flowToken ??= String(inflow);
+
+      const out = flowAsDirection(inflow, flowToken);
+      this.cache.flow = out;
+      return out;
+    } finally {
+      delete this.cache._flow;
+    }
+  }
+
+  private parentFlowAbsolute(def?: FlowDirection): FlowDirection | undefined {
+    // Ported from Graph::Easy::Node::_parent_flow_absolute.
+    // We treat parent flow (graph/group) as absolute.
+
+    let raw: string | undefined;
+
+    let g: Group | undefined = this.group;
+    while (g) {
+      const v = g.rawAttribute("flow");
+      if (v !== undefined && v.trim() !== "") {
+        raw = v;
+        break;
+      }
+      g = g.parent;
     }
 
-    // Default flow is east.
-    return 90;
+    if (raw === undefined) {
+      raw = this.graph?.graphAttributes.flow;
+    }
+
+    if (raw === undefined || raw.trim() === "") return def;
+
+    const token = raw.trim().toLowerCase();
+    if (token === "inherit") return def;
+
+    const abs = PARENT_FLOW[token];
+    if (abs !== undefined) return abs;
+
+    const d = DIRS[token];
+    if (d !== undefined) return d;
+
+    throw new Error(`Invalid parent flow: ${raw}`);
   }
 
   private shuffleDir(e: readonly number[], dir: number | undefined): number[] {

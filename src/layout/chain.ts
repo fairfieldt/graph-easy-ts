@@ -159,10 +159,20 @@ export class LayoutChain {
     // --- Recurse into other chains starting from nodes in this chain ---
     n = this.start;
     while (n) {
+      // Perl sorts only by destination name (codepoint compare):
+      //   sort { $a->{to}->{name} cmp $b->{to}->{name} } values %{$n->{edges}}
+      // Preserve the original deterministic edge-id order for ties.
       const edges = n
         .edges()
         .slice()
-        .sort((a, b) => a.to.id.localeCompare(b.to.id) || a.id - b.id);
+        .map((e, idx) => ({ e, idx }))
+        .sort((a, b) => {
+          const at = a.e.to.id;
+          const bt = b.e.to.id;
+          const d = at < bt ? -1 : at > bt ? 1 : 0;
+          return d || a.idx - b.idx;
+        })
+        .map(({ e }) => e);
 
       for (const e of edges) {
         const to = e.to;

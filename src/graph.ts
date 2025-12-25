@@ -3,6 +3,7 @@ import { Edge } from "./edge";
 import { Group } from "./group";
 import { Node, type FlowDirection } from "./node";
 import type { EdgeCell } from "./layout/edgeCell";
+import type { EdgeCellEmpty } from "./layout/edgeCellEmpty";
 import type { GroupCell } from "./layout/groupCell";
 import type { NodeCell } from "./layout/nodeCell";
 
@@ -19,21 +20,29 @@ function inferEdgeStyleFromOperators(leftOp: string, rightOp: string): string {
   //   ..->  -> dot-dot-dash
   //   .->   -> dot-dash
   //   ..>   -> dotted
-  //   ->    -> dashed
+  //   - >   -> dashed
   //   -->   -> solid
-  const op = leftOp === rightOp ? leftOp : leftOp + rightOp;
 
-  // Strip arrowheads.
-  const core = op.replace(/[<>]/g, "");
+  // Strip arrowheads but preserve spaces so we can distinguish e.g. "- >" from "->".
+  const coreLeft = leftOp.replace(/[<>]/g, "");
+  const coreRight = rightOp.replace(/[<>]/g, "");
+  const core = coreLeft + coreRight;
 
   if (core.includes("~~")) return "wave";
   if (core.includes("..-")) return "dot-dot-dash";
   if (core.includes(".-")) return "dot-dash";
   if (core.includes("..")) return "dotted";
+
+  // Dashed variants preserve a space in the operator ("- ", "= ").
+  // Check these before the solid/double fallbacks because mixed cases like
+  // "-  label - >" otherwise look like "--" after concatenation.
+  if (core.includes("= ")) return "double-dash";
+  if (core.includes("- ")) return "dashed";
+
   if (core.includes("==")) return "double";
   if (core.includes("=")) return "double-dash";
   if (core.includes("--")) return "solid";
-  if (core.includes("-")) return "dashed";
+  if (core.includes("-")) return "solid";
 
   return "solid";
 }
@@ -55,13 +64,15 @@ export class Graph {
 
   private readonly nodesById = new Map<string, Node>();
 
+  private nextNodeId = 1;
+
   private nextEdgeId = 1;
 
   public readonly edges: Edge[] = [];
   public readonly groups: Group[] = [];
 
   // The laid out grid cells (keyed by "x,y" in grid coordinates).
-  public cells: Map<string, Node | EdgeCell | NodeCell | GroupCell> | undefined;
+  public cells: Map<string, Node | EdgeCell | NodeCell | GroupCell | EdgeCellEmpty> | undefined;
 
   public node(id: string): Node | undefined {
     return this.nodesById.get(id);
@@ -105,7 +116,9 @@ export class Graph {
     const map =
       kind === "node" ? this.nodeClassAttributes : kind === "edge" ? this.edgeClassAttributes : this.groupClassAttributes;
 
-    const existing = map.get(className);
+    const key = className.trim().toLowerCase();
+
+    const existing = map.get(key);
     if (existing) {
       mergeAttributes(existing, attrs);
       return;
@@ -113,7 +126,7 @@ export class Graph {
 
     const copy: Attributes = Object.create(null);
     mergeAttributes(copy, attrs);
-    map.set(className, copy);
+    map.set(key, copy);
   }
 
   public addNode(label: string): Node {
@@ -121,7 +134,7 @@ export class Graph {
     const existing = this.nodesById.get(id);
     if (existing) return existing;
 
-    const node = new Node(id, label);
+    const node = new Node(id, label, this.nextNodeId++);
     node.graph = this;
     node.setAttributes(this.defaultNodeAttributes);
     this.nodesById.set(id, node);

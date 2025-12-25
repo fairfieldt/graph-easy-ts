@@ -17,15 +17,19 @@ export class EdgeCell {
   public cx: number | undefined;
   public cy: number | undefined;
 
-  // For cross sections we may keep the secondary style/color later.
+  // For cross sections we may need both the horizontal and vertical edge styles.
+  public crossHorEdge: Edge | undefined;
+  public crossVerEdge: Edge | undefined;
 
   public constructor(
     public readonly edge: Edge,
     public x: number,
     public y: number,
-    public type: number
+    public type: number,
+    after?: EdgeCell | number,
+    before?: EdgeCell
   ) {
-    edge.addCell(this);
+    edge.addCell(this, after, before);
   }
 
   public isEdgeCell(): boolean {
@@ -36,10 +40,18 @@ export class EdgeCell {
     return this.edge.group;
   }
 
-  public makeCross(_crossingEdge: Edge, flags: number): void {
+  public makeCross(crossingEdge: Edge, flags: number): void {
     const base = this.type & EDGE_TYPE_MASK;
     if (base !== EDGE_HOR && base !== EDGE_VER) {
       throw new Error(`Trying to cross non hor/ver piece at ${this.x},${this.y}`);
+    }
+
+    if (base === EDGE_HOR) {
+      this.crossHorEdge = this.edge;
+      this.crossVerEdge = crossingEdge;
+    } else {
+      this.crossHorEdge = crossingEdge;
+      this.crossVerEdge = this.edge;
     }
 
     this.type = EDGE_CROSS + (flags & EDGE_FLAG_MASK);

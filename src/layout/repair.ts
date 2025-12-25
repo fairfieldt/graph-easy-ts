@@ -1,4 +1,5 @@
 import { EdgeCell } from "./edgeCell";
+import { EdgeCellEmpty } from "./edgeCellEmpty";
 import { GroupCell } from "./groupCell";
 import { NodeCell } from "./nodeCell";
 import {
@@ -24,7 +25,7 @@ import { Node } from "../node";
 import type { Edge } from "../edge";
 import type { Graph } from "../graph";
 
-type Cell = Node | EdgeCell | NodeCell | GroupCell;
+type Cell = Node | EdgeCell | NodeCell | GroupCell | EdgeCellEmpty;
 export type CellMap = Map<string, Cell>;
 
 type RowCol = Map<number, Map<number, Cell>>;
@@ -91,7 +92,8 @@ function spliceEdges(cells: CellMap): void {
         if (edge === right.edge || right.type === EDGE_CROSS || cell.type === EDGE_CROSS) {
           const midKey = `${cell.x + 1},${y}`;
           if (!cells.has(midKey)) {
-            cells.set(midKey, new EdgeCell(edge, cell.x + 1, y, EDGE_HOR));
+            const before = right.edge === edge ? right : undefined;
+            cells.set(midKey, new EdgeCell(edge, cell.x + 1, y, EDGE_HOR, cell, before));
           }
         }
       }
@@ -106,7 +108,8 @@ function spliceEdges(cells: CellMap): void {
         if (edge === below.edge || below.type === EDGE_CROSS || cell.type === EDGE_CROSS) {
           const midKey = `${x},${cell.y + 1}`;
           if (!cells.has(midKey)) {
-            cells.set(midKey, new EdgeCell(edge, x, cell.y + 1, EDGE_VER));
+            const before = below.edge === edge ? below : undefined;
+            cells.set(midKey, new EdgeCell(edge, x, cell.y + 1, EDGE_VER, cell, before));
           }
         }
       }
@@ -208,11 +211,20 @@ function buildRowColMaps(cells: CellMap): { rows: RowCol; cols: RowCol } {
   return { rows, cols };
 }
 
-function newEdgeCell(cells: CellMap, group: Group | undefined, edge: Edge, x: number, y: number, type: number): void {
+function newEdgeCell(
+  cells: CellMap,
+  group: Group | undefined,
+  edge: Edge,
+  x: number,
+  y: number,
+  type: number,
+  after?: EdgeCell | number,
+  before?: EdgeCell
+): void {
   let t = type;
   if (group) t += EDGE_SHORT_CELL;
 
-  const eCell = new EdgeCell(edge, x, y, t);
+  const eCell = new EdgeCell(edge, x, y, t, after, before);
 
   // If we overwrote a group-border cell, remove it from the group’s cell registry.
   if (group) group._delCellAt(x, y);
@@ -238,7 +250,18 @@ function checkEdgeCell(
   cell.type &= ~flag;
 
   const edge = cell.edge;
-  newEdgeCell(cells, edge.group, edge, x, y, baseType + flag);
+
+  // Keep the edge's internal cell order consistent with the geometric path.
+  // Start pieces belong *before* the current cell, end pieces belong *after*.
+  let insertAfter: EdgeCell | number | undefined;
+  if ((flag & EDGE_START_MASK) !== 0) {
+    const idx = edge.cells.findIndex((c) => c === cell);
+    insertAfter = idx === -1 ? undefined : idx;
+  } else {
+    insertAfter = cell;
+  }
+
+  newEdgeCell(cells, edge.group, edge, x, y, baseType + flag, insertAfter);
 }
 
 function repairGroupEdge(cells: CellMap, cell: EdgeCell, rows: RowCol, cols: RowCol, group: Group): void {
@@ -324,7 +347,7 @@ function repairEdge(cells: CellMap, cell: EdgeCell, rows: RowCol): void {
   if (!hasBorder) return;
 
   cell.type &= ~EDGE_END_S;
-  newEdgeCell(cells, undefined, cell.edge, x, y, EDGE_VER + EDGE_END_S);
+  newEdgeCell(cells, undefined, cell.edge, x, y, EDGE_VER + EDGE_END_S, cell);
 }
 
 function repairEdges(cells: CellMap): void {

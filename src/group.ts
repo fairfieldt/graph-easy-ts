@@ -25,11 +25,21 @@ export class Group {
   }
 
   public attribute(key: string): string {
-    return this.attributes[key] ?? "";
+    const own = this.attributes[key];
+    if (own !== undefined) return own;
+
+    // Graph::Easy uses graph-level textwrap as the default for label wrapping.
+    if (key === "textwrap") {
+      return this.graph?.graphAttributes.textwrap ?? "";
+    }
+
+    return "";
   }
 
   public label(): string {
-    return this.name.endsWith(":") ? this.name : `${this.name}:`;
+    // Graph::Easy does not automatically append ':' to group labels. The colon
+    // only appears when it is part of the group name (e.g. "DMZ:").
+    return this.name;
   }
 
   public addNode(node: Node): void {
@@ -77,22 +87,20 @@ export class Group {
     for (const [, c] of entries) {
       if (c.cellClass.trim() !== want) continue;
 
-      if (!lc) {
-        lc = c;
-        continue;
-      }
-
-      if (align === "left") {
-        // top-most, left-most
-        if (lc.y < c.y) continue;
-        if (lc.y === c.y && lc.x <= c.x) continue;
-      } else if (align === "center") {
-        // any top-most
-        if (lc.y < c.y) continue;
-      } else if (align === "right") {
-        // top-most, right-most
-        if (lc.y < c.y) continue;
-        if (lc.y === c.y && lc.x >= c.x) continue;
+      // Match Perl's selection semantics exactly. Note that the Perl code relies on
+      // iterating ord_values() (lexicographic by key) and then applying these
+      // comparisons, which is *not* equivalent to a simple y-then-x sort.
+      if (lc) {
+        if (align === "left") {
+          // Perl: next if $lc->{x} < $c->{x} || $lc->{y} < $c->{y};
+          if (lc.x < c.x || lc.y < c.y) continue;
+        } else if (align === "center") {
+          // Perl: next if $lc->{y} < $c->{y};
+          if (lc.y < c.y) continue;
+        } else if (align === "right") {
+          // Perl: next if $lc->{x} > $c->{x} || $lc->{y} < $c->{y};
+          if (lc.x > c.x || lc.y < c.y) continue;
+        }
       }
 
       lc = c;

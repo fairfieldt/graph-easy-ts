@@ -1,11 +1,13 @@
 import { appendFileSync } from "node:fs";
 
 import { EdgeCell } from "./edgeCell";
+import { EdgeCellEmpty } from "./edgeCellEmpty";
 import { GroupCell } from "./groupCell";
 import { NodeCell } from "./nodeCell";
 import { fillGroupCells } from "./repair";
 import {
   EDGE_CROSS,
+  EDGE_END_MASK,
   EDGE_END_E,
   EDGE_END_N,
   EDGE_END_S,
@@ -14,8 +16,17 @@ import {
   EDGE_HOLE,
   EDGE_HOR,
   EDGE_LABEL_CELL,
+  EDGE_MISC_MASK,
+  EDGE_LOOP_EAST,
+  EDGE_LOOP_NORTH,
+  EDGE_LOOP_SOUTH,
+  EDGE_LOOP_WEST,
   EDGE_N_E,
   EDGE_N_W,
+  EDGE_N_E_W,
+  EDGE_S_E_W,
+  EDGE_E_N_S,
+  EDGE_W_N_S,
   EDGE_NO_M_MASK,
   EDGE_S_E,
   EDGE_S_W,
@@ -35,13 +46,21 @@ import { applyEndPoints, astarEdgeType, directionSign, type Direction } from "./
 import { Heap } from "./heap";
 
 import { LayoutChain, type LayoutAction } from "./chain";
-import { ACTION_CHAIN, ACTION_NODE, ACTION_TRACE } from "./actionTypes";
+import { ACTION_CHAIN, ACTION_NODE, ACTION_SPLICE, ACTION_TRACE } from "./actionTypes";
 
 import type { Edge } from "../edge";
 import type { Graph } from "../graph";
-import type { Node, FlowDirection } from "../node";
+import { Node, type FlowDirection } from "../node";
 
-type CellMap = Map<string, Node | EdgeCell | NodeCell | GroupCell>;
+type CellMap = Map<string, Node | EdgeCell | NodeCell | GroupCell | EdgeCellEmpty>;
+
+function cmpStr(a: string, b: string): number {
+  // Perl's sort/cmp is bytewise; use codepoint ordering (not localeCompare)
+  // so uppercase/lowercase ordering matches the canonical fixtures.
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
 
 function debugRunId(): string {
   return process.env.GE_DEBUG_RUN_ID ?? "r1";
@@ -73,7 +92,9 @@ function assignRanks(graph: Graph, root: Node | undefined): void {
   const todo: Array<[number, Node]> = [];
   const also: Node[] = [];
 
-  const nodes = [...graph.nodes()].sort((a, b) => a.id.localeCompare(b.id));
+  // Perl Layout.pm iterates nodes via ord_values($self->{nodes}), which is keyed
+  // by the internal numeric node id (not the node name). Match that ordering.
+  const nodes = [...graph.nodes()].sort((a, b) => cmpStr(String(a.numericId), String(b.numericId)));
 
   if (root) {
     root.rank = -1;
@@ -161,20 +182,28 @@ function followChain(
   chains: Map<number, LayoutChain>,
   nextChainId: { value: number },
   root: Node | undefined,
-  node: Node
+  node: Node,
+  branchGuard: Set<Node>
 ): number {
   const chain = new LayoutChain(nextChainId.value++, node, graph);
   chains.set(chain.id, chain);
 
   let done = 1;
 
-  // Stop backward loops.
-  const inBranch = new Set<Node>();
+  // Perl uses `local $node->{_c} = 1` to prevent following edges back into the
+  // currently-tracked branch (including across recursion). Model this with a
+  // Set that is shared across recursive followChain() calls.
+  const locallyMarked: Node[] = [];
+  const markInBranch = (n: Node): void => {
+    if (branchGuard.has(n)) return;
+    branchGuard.add(n);
+    locallyMarked.push(n);
+  };
 
   let curr: Node = node;
 
   while (true) {
-    inBranch.add(curr);
+    markInBranch(curr);
 
     // Count unique successors, ignoring selfloops and multi-edges.
     const suc = new Map<string, Node>();
@@ -190,11 +219,23 @@ function followChain(
       // Edge leads to this node instead of away from it?
       if (to === curr) continue;
 
+      // If any outgoing edge has an explicit flow, stop the chain here and only
+      // consider this one successor (Perl Layout.pm:_follow_chain).
+      if (e.edgeFlow() !== undefined) {
+        suc.clear();
+        suc.set(to.id, to);
+        break;
+      }
+
       // Backloop into current branch?
-      if (inBranch.has(to)) continue;
+      if (branchGuard.has(to)) continue;
 
       // Ignore backloops into the same chain.
       if (to.chain && to.chain === chain) continue;
+
+      // If the next node's grandparent is the same as ours, it depends on us.
+      // (This matters for autosplit/child nodes.)
+      if (to.findGrandparent() === curr.findGrandparent()) continue;
 
       if (!suc.has(to.id)) {
         suc.set(to.id, to);
@@ -218,9 +259,15 @@ function followChain(
     let nextChain: LayoutChain | undefined;
     let nextNode: Node | undefined;
 
-    for (const s of suc.values()) {
+    // Perl iterates successors via ord_values(%suc) (sorted by key). This order
+    // affects tie-breaking when multiple successor chains have the same length.
+    const successors = [...suc.entries()]
+      .sort(([a], [b]) => cmpStr(a, b))
+      .map(([, s]) => s);
+
+    for (const s of successors) {
       if (!s.chain) {
-        done += followChain(graph, chains, nextChainId, root, s);
+        done += followChain(graph, chains, nextChainId, root, s, branchGuard);
       }
 
       const ch = s.chain;
@@ -246,6 +293,7 @@ function followChain(
     break;
   }
 
+  for (const n of locallyMarked) branchGuard.delete(n);
   return done;
 }
 
@@ -256,7 +304,8 @@ function findChains(graph: Graph): { root: Node | undefined; chains: Map<number,
     n.chainNext = undefined;
   }
 
-  const nodes = [...graph.nodes()].sort((a, b) => a.id.localeCompare(b.id));
+  // Match Perl Layout.pm node ordering (internal numeric id, not name).
+  const nodes = [...graph.nodes()].sort((a, b) => cmpStr(String(a.numericId), String(b.numericId)));
 
   const rootName = parseGraphRootName(graph);
 
@@ -265,7 +314,7 @@ function findChains(graph: Graph): { root: Node | undefined; chains: Map<number,
     p.push({
       name: n.id,
       hasPredecessors: n.hasPredecessors(),
-      hasOrigin: 0,
+      hasOrigin: n.origin && n.origin !== n ? 1 : 0,
       absRank: Math.abs(n.rank ?? 0),
     });
   }
@@ -277,7 +326,7 @@ function findChains(graph: Graph): { root: Node | undefined; chains: Map<number,
         a.absRank - b.absRank ||
         a.hasOrigin - b.hasOrigin ||
         a.hasPredecessors - b.hasPredecessors ||
-        a.name.localeCompare(b.name)
+        cmpStr(a.name, b.name)
       );
     })
     .map((e) => e.name);
@@ -301,7 +350,7 @@ function findChains(graph: Graph): { root: Node | undefined; chains: Map<number,
     if (done === todoCount) break;
 
     if (!n.chain) {
-      done += followChain(graph, chains, nextChainId, root, n);
+      done += followChain(graph, chains, nextChainId, root, n, new Set<Node>());
     }
   }
 
@@ -369,6 +418,614 @@ function placeNode(
       if (dx === 0 && dy === 0) continue;
       cells.set(`${x + dx},${y + dy}`, new NodeCell(node, x + dx, y + dy));
     }
+  }
+}
+
+function tryPlaceNodeAt(
+  cells: CellMap,
+  node: Node,
+  x0: number,
+  y0: number,
+  rankPos?: Map<number, number>,
+  flow?: FlowDirection
+): boolean {
+  const placeSingleNodeAt = (n: Node, px: number, py: number): boolean => {
+    const nCx = n.cx ?? 1;
+    const nCy = n.cy ?? 1;
+
+    for (let dx = 0; dx < nCx; dx++) {
+      for (let dy = 0; dy < nCy; dy++) {
+        if (cells.has(`${px + dx},${py + dy}`)) return false;
+      }
+    }
+
+    n.x = px;
+    n.y = py;
+
+    // Mark occupied rectangle. Store the node itself at the anchor, and use
+    // placeholder NodeCell entries for the remaining occupied cells.
+    cells.set(`${px},${py}`, n);
+    for (let dx = 0; dx < nCx; dx++) {
+      for (let dy = 0; dy < nCy; dy++) {
+        if (dx === 0 && dy === 0) continue;
+        cells.set(`${px + dx},${py + dy}`, new NodeCell(n, px + dx, py + dy));
+      }
+    }
+
+    // Store the first placed node's coordinate for this abs(rank).
+    // Ported from Graph::Easy::Node::_place.
+    if (rankPos && flow !== undefined) {
+      const r = Math.abs(n.rank ?? 0);
+      const what = rankCoordForFlow(flow);
+      if (!rankPos.has(r)) {
+        rankPos.set(r, what === "x" ? px : py);
+      }
+    }
+
+    return true;
+  };
+
+  // Relative-placement clusters: placing any node with an origin (or any node that
+  // has children) places the entire origin-chain subtree.
+  // Ported from Graph::Easy::Node::_do_place / _place_children.
+  if ((node.origin && node.origin !== node) || node.children.size > 0) {
+    const [grandpa, ox, oy] = node.findGrandparentWithOffset();
+    const gx = x0 + ox;
+    const gy = y0 + oy;
+
+    const planned: Array<[Node, number, number]> = [];
+    const seen = new Set<Node>();
+
+    const plan = (n: Node, px: number, py: number): void => {
+      if (seen.has(n)) {
+        throw new Error(`Detected loop in children graph starting at '${grandpa.id}'`);
+      }
+      seen.add(n);
+      planned.push([n, px, py]);
+
+      const children = [...n.children.values()].sort((a, b) => cmpStr(a.id, b.id));
+      for (const child of children) {
+        // Compute place of children (depending on whether we are multicelled or not)
+        // like Graph::Easy::Node::_place_children.
+        const baseDx = child.dx > 0 ? (n.cx ?? 1) - 1 : 0;
+        const baseDy = child.dy > 0 ? (n.cy ?? 1) - 1 : 0;
+        plan(child, px + baseDx + child.dx, py + baseDy + child.dy);
+      }
+    };
+
+    plan(grandpa, gx, gy);
+
+    // If any node in the cluster is already placed, it must match the planned placement.
+    for (const [n, px, py] of planned) {
+      if (n.x !== undefined || n.y !== undefined) {
+        if (n.x !== px || n.y !== py) return false;
+      }
+    }
+
+    // Check that all required cells are either empty, or already occupied by this cluster.
+    const clusterNodes = new Set<Node>(planned.map(([n]) => n));
+    const occupied = new Set<string>();
+    for (const [n, px, py] of planned) {
+      const nCx = n.cx ?? 1;
+      const nCy = n.cy ?? 1;
+
+      for (let dx = 0; dx < nCx; dx++) {
+        for (let dy = 0; dy < nCy; dy++) {
+          const key = `${px + dx},${py + dy}`;
+          if (occupied.has(key)) return false;
+          occupied.add(key);
+
+          const existing = cells.get(key);
+          if (!existing) continue;
+
+          if (existing instanceof Node) {
+            if (!clusterNodes.has(existing)) return false;
+            continue;
+          }
+          if (existing instanceof NodeCell) {
+            if (!clusterNodes.has(existing.node)) return false;
+            continue;
+          }
+
+          // EdgeCell / GroupCell occupy the space.
+          return false;
+        }
+      }
+    }
+
+    // Place all currently-unplaced nodes in the cluster.
+    for (const [n, px, py] of planned) {
+      if (n.x !== undefined && n.y !== undefined) continue;
+      if (!placeSingleNodeAt(n, px, py)) return false;
+    }
+
+    return true;
+  }
+
+  return placeSingleNodeAt(node, x0, y0);
+}
+
+function clearTries(node: Node, cells: CellMap, tries: number[]): number[] {
+  // Ported from Graph::Easy::Layout::Path::_clear_tries.
+  // Remove placements that are immediately adjacent to any other node.
+  const out: number[] = [];
+
+  const origX = node.x;
+  const origY = node.y;
+
+  for (let src = 0; src < tries.length; src += 2) {
+    const x = tries[src];
+    const y = tries[src + 1];
+
+    node.x = x;
+    node.y = y;
+
+    const near = node.nearPlaces(cells, 1, undefined, true, undefined);
+
+    // Also avoid placing nodes corner-to-corner.
+    const cx = node.cx ?? 1;
+    const cy = node.cy ?? 1;
+    near.push(x - 1, y - 1);
+    near.push(x - 1, y + cy);
+    near.push(x + cx, y + cy);
+    near.push(x + cx, y - 1);
+
+    let blocked = false;
+    for (let j = 0; j < near.length; j += 2) {
+      const nx = near[j];
+      const ny = near[j + 1];
+      const cell = cells.get(`${nx},${ny}`);
+      // Perl's _clear_tries blocks placements that are adjacent to any
+      // Graph::Easy::Node. In Perl, edges and edge cells inherit from Node,
+      // so edge cells also block adjacency. Mirror that behavior here.
+      if (
+        cell instanceof Node ||
+        cell instanceof NodeCell ||
+        cell instanceof EdgeCell ||
+        cell instanceof GroupCell ||
+        cell instanceof EdgeCellEmpty
+      ) {
+        blocked = true;
+        break;
+      }
+    }
+
+    if (!blocked) {
+      out.push(x, y);
+    }
+  }
+
+  node.x = origX;
+  node.y = origY;
+
+  return out;
+}
+
+function unplaceEdge(cells: CellMap, edge: Edge): void {
+  // Ported from Graph::Easy::Edge::_unplace.
+  for (const c of edge.cells) {
+    cells.delete(`${c.x},${c.y}`);
+  }
+  edge.clearCells();
+}
+
+function unplaceNode(cells: CellMap, node: Node): void {
+  // Ported from Graph::Easy::Node::_unplace.
+  // Relative-placement clusters must be unplaced as a unit; this also cleans up
+  // partial placements from failed cluster placement attempts.
+  if ((node.origin && node.origin !== node) || node.children.size > 0) {
+    const root = node.findGrandparent();
+    const seen = new Set<Node>();
+
+    const unplaceRec = (n: Node): void => {
+      if (seen.has(n)) return;
+      seen.add(n);
+
+      const children = [...n.children.values()].sort((a, b) => cmpStr(a.id, b.id));
+      for (const child of children) {
+        unplaceRec(child);
+      }
+
+      if (n.x !== undefined && n.y !== undefined) {
+        const x0 = n.x;
+        const y0 = n.y;
+        const cx = n.cx ?? 1;
+        const cy = n.cy ?? 1;
+
+        for (let dx = 0; dx < cx; dx++) {
+          for (let dy = 0; dy < cy; dy++) {
+            cells.delete(`${x0 + dx},${y0 + dy}`);
+          }
+        }
+
+        n.x = undefined;
+        n.y = undefined;
+      }
+
+      n.cache = Object.create(null);
+      for (const e of n.edges()) {
+        unplaceEdge(cells, e);
+      }
+    };
+
+    unplaceRec(root);
+    return;
+  }
+
+  if (node.x === undefined || node.y === undefined) return;
+
+  const x0 = node.x;
+  const y0 = node.y;
+  const cx = node.cx ?? 1;
+  const cy = node.cy ?? 1;
+
+  for (let dx = 0; dx < cx; dx++) {
+    for (let dy = 0; dy < cy; dy++) {
+      cells.delete(`${x0 + dx},${y0 + dy}`);
+    }
+  }
+
+  node.x = undefined;
+  node.y = undefined;
+  node.cache = Object.create(null);
+
+  for (const e of node.edges()) {
+    unplaceEdge(cells, e);
+  }
+}
+
+function findNodePlace(
+  graph: Graph,
+  cells: CellMap,
+  rankPos: Map<number, number>,
+  flow: FlowDirection,
+  node: Node,
+  tryIndex: number,
+  parent: Node | undefined,
+  edge: Edge | undefined
+): void {
+  // Ported from Graph::Easy::Layout::Path::_find_node_place (Graph-Easy 0.76).
+  if (node.x !== undefined && node.y !== undefined) return;
+
+  // Relative placement (Graph::Easy::Node->relative_to).
+  // If the node has an origin, try to place it at origin + (dx,dy).
+  if (node.origin && node.origin !== node) {
+    const org = node.origin;
+
+    if (org.x !== undefined && org.y !== undefined) {
+      // Compute place of child (depending on whether origin is multicelled) like
+      // Graph::Easy::Node::_place_children.
+      const baseDx = node.dx > 0 ? (org.cx ?? 1) - 1 : 0;
+      const baseDy = node.dy > 0 ? (org.cy ?? 1) - 1 : 0;
+      const rx = org.x + baseDx + node.dx;
+      const ry = org.y + baseDy + node.dy;
+      if (tryPlaceNodeAt(cells, node, rx, ry, rankPos, flow)) return;
+    }
+  }
+
+  const tryOffset = tryIndex ?? 0;
+
+  // If the node has a user-set rank, see if we already placed another node in that row/column.
+  // Ported from Graph::Easy::Layout::Path::_find_node_place.
+  if ((node.rank ?? -1) >= 0) {
+    const r = Math.abs(node.rank ?? 0);
+    const c = rankCoordForFlow(flow);
+    const base = rankPos.get(r);
+
+    if (base !== undefined) {
+      let x = 0;
+      let y = 0;
+      if (c === "x") x = base;
+      else y = base;
+
+      while (true) {
+        if (tryPlaceNodeAt(cells, node, x, y, rankPos, flow)) return;
+        if (c === "x") x += 2;
+        else y += 2;
+      }
+    }
+  }
+
+  // If the node has outgoing edges (which might be shared), try to place it further away
+  // to make space for joints. Ported from Graph::Easy::Layout::Path::_find_node_place.
+  let placeEdge: Edge | undefined = edge;
+  if (!placeEdge) {
+    const all = [...node.edges()].sort((a, b) => cmpStr(String(a.id), String(b.id)));
+    if (all.length > 0) placeEdge = all[0];
+  }
+
+  let minDist = 2;
+  if (edge) {
+    const raw = edge.attribute("minlen").trim();
+    let minlen = raw === "" ? 1 : Number(raw);
+    if (!Number.isFinite(minlen)) {
+      throw new Error(`Invalid edge minlen: ${edge.attribute("minlen")}`);
+    }
+    minlen = Math.abs(minlen);
+    if (minlen < 1) minlen = 1;
+    minDist = minlen + 1;
+  }
+
+  if (placeEdge && node.edges().length > 0) {
+    const flowShift = (d: FlowDirection): [number, number] => {
+      // Ported from Graph::Easy::Layout::Path.pm ($flow_shift): shift to the
+      // right side of the flow.
+      if (d === 270) return [0, -1];
+      if (d === 90) return [0, 1];
+      if (d === 0) return [1, 0];
+      if (d === 180) return [-1, 0];
+      return [0, 1];
+    };
+
+    const placedShared = (shared: Node[]): [number, number] | undefined => {
+      for (const n of shared) {
+        if (n.x !== undefined && n.y !== undefined) return [n.x, n.y];
+      }
+      return undefined;
+    };
+
+    const nodesSharingStart = (from: Node, side: string, port: number): Node[] => {
+      const nodes = new Map<string, Node>();
+      for (const e of edgesAtPort(from, "start", side, port)) {
+        const to = e.to;
+        if (to === from) continue; // ignore self-loops
+        nodes.set(to.id, to);
+      }
+      return [...nodes.entries()]
+        .sort((a, b) => cmpStr(a[0], b[0]))
+        .map(([, n]) => n);
+    };
+
+    const nodesSharingEnd = (to: Node, side: string, port: number): Node[] => {
+      const nodes = new Map<string, Node>();
+      for (const e of edgesAtPort(to, "end", side, port)) {
+        const from = e.from;
+        if (from === to) continue; // ignore self-loops
+        nodes.set(from.id, from);
+      }
+      return [...nodes.entries()]
+        .sort((a, b) => cmpStr(a[0], b[0]))
+        .map(([, n]) => n);
+    };
+
+    const bumpMinDistForShared = (): void => {
+      if (minDist < 3) minDist = 3;
+      if (placeEdge.labelText() !== "") minDist += 1;
+    };
+
+    const tryPlaceFromShared = (base: [number, number]): void => {
+      const [bx, by] = base;
+      const [mx, my] = flowShift(node.flow());
+
+      // Ported from Graph::Easy::Layout::Path.pm: start at ofs=2 and let
+      // clearTries()/tryPlaceNodeAt() decide whether the spot is acceptable.
+      let ofs = 2;
+
+      for (; ; ofs += 2) {
+        const x = bx + mx * ofs;
+        const y = by + my * ofs;
+        if (clearTries(node, cells, [x, y]).length === 0) continue;
+        if (tryPlaceNodeAt(cells, node, x, y, rankPos, flow)) return;
+      }
+    };
+
+    // Shared start point?
+    const [sSide, sPort] = placeEdge.port("start");
+    if (sSide !== undefined && sPort !== undefined) {
+      const shared = nodesSharingStart(placeEdge.from, sSide, sPort);
+      if (shared.length > 1) {
+        bumpMinDistForShared();
+        const placed = placedShared(shared);
+        if (placed) {
+          tryPlaceFromShared(placed);
+          return;
+        }
+      }
+    }
+
+    // Shared end point?
+    const [eSide, ePort] = placeEdge.port("end");
+    if (eSide !== undefined && ePort !== undefined) {
+      const shared = nodesSharingEnd(placeEdge.to, eSide, ePort);
+      if (shared.length > 1) {
+        bumpMinDistForShared();
+        const placed = placedShared(shared);
+        if (placed && shared.some((n) => n === node)) {
+          tryPlaceFromShared(placed);
+          return;
+        }
+      }
+    }
+  }
+
+  const dir = placeEdge ? placeEdge.flow() : undefined;
+
+  // Chained placement: place near parent first.
+  if (parent && parent.x !== undefined && parent.y !== undefined) {
+    const debugChain = node.id === "U" && parent.id === "B";
+
+    const describeCell = (cell: unknown): Record<string, unknown> | null => {
+      if (!cell) return null;
+      if (cell instanceof Node) {
+        return { kind: "Node", id: cell.id, x: cell.x, y: cell.y, cx: cell.cx ?? 1, cy: cell.cy ?? 1 };
+      }
+      if (cell instanceof NodeCell) return { kind: "NodeCell", nodeId: cell.node.id };
+      if (cell instanceof EdgeCell) return { kind: "EdgeCell", edgeId: cell.edge?.id, type: cell.type };
+      if (cell instanceof GroupCell) return { kind: "GroupCell", name: cell.group.name };
+      if (cell instanceof EdgeCellEmpty) return { kind: "EdgeCellEmpty" };
+      return { kind: typeof cell };
+    };
+
+    let tries: number[];
+    if (debugChain) {
+      const all = parent.nearPlaces(cells, minDist, undefined, true, dir);
+      tries = parent.nearPlaces(cells, minDist, undefined, false, dir);
+
+      const filteredKeys = new Set<string>();
+      for (let i = 0; i < tries.length; i += 2) {
+        filteredKeys.add(`${tries[i]},${tries[i + 1]}`);
+      }
+
+      const omitted: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < all.length; i += 2) {
+        const x = all[i];
+        const y = all[i + 1];
+        const key = `${x},${y}`;
+        if (filteredKeys.has(key)) continue;
+        omitted.push({ x, y, cell: describeCell(cells.get(key)) });
+      }
+
+      debugLog({
+        runId: debugRunId(),
+        hypothesisId: "h_chain_near_places",
+        location: "layout.ts:findNodePlace",
+        node: { id: node.id },
+        parent: { id: parent.id, x: parent.x, y: parent.y, cx: parent.cx ?? 1, cy: parent.cy ?? 1 },
+        edgeId: placeEdge?.id,
+        tryIndex,
+        minDist,
+        dir,
+        all,
+        tries,
+        omitted,
+      });
+    } else {
+      tries = parent.nearPlaces(cells, minDist, undefined, false, dir);
+    }
+
+    const beforeClear = tries;
+    tries = clearTries(node, cells, tries);
+
+    if (debugChain) {
+      debugLog({
+        runId: debugRunId(),
+        hypothesisId: "h_chain_clear_tries",
+        location: "layout.ts:findNodePlace",
+        nodeId: node.id,
+        parentId: parent.id,
+        tryIndex,
+        minDist,
+        dir,
+        before: beforeClear,
+        after: tries,
+      });
+    }
+
+    if (tryOffset > 0) tries = tries.slice(tryOffset);
+
+    for (let i = 0; i < tries.length; i += 2) {
+      const x = tries[i];
+      const y = tries[i + 1];
+
+      if (debugChain) {
+        debugLog({
+          runId: debugRunId(),
+          hypothesisId: "h_chain_try",
+          location: "layout.ts:findNodePlace",
+          nodeId: node.id,
+          parentId: parent.id,
+          edgeId: placeEdge?.id,
+          tryIndex,
+          minDist,
+          dir,
+          x,
+          y,
+          cell: describeCell(cells.get(`${x},${y}`)),
+        });
+      }
+
+      if (tryPlaceNodeAt(cells, node, x, y, rankPos, flow)) {
+        if (debugChain) {
+          debugLog({
+            runId: debugRunId(),
+            hypothesisId: "h_chain_place_success",
+            location: "layout.ts:findNodePlace",
+            nodeId: node.id,
+            parentId: parent.id,
+            edgeId: placeEdge?.id,
+            tryIndex,
+            minDist,
+            dir,
+            x,
+            y,
+          });
+        }
+        return;
+      }
+    }
+  }
+
+  // First node: try 0,0.
+  if (tryOffset === 0) {
+    if (tryPlaceNodeAt(cells, node, 0, 0, rankPos, flow)) return;
+  }
+
+  let tries: number[] = [];
+
+  // Placed predecessors.
+  const preAll = node.predecessors();
+  let pre = preAll.filter((p) => p.x !== undefined && p.y !== undefined);
+  pre = pre.sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0));
+
+  if (pre.length > 0 && pre.length <= 2) {
+    if (pre.length === 1) {
+      tries.push(...pre[0].nearPlaces(cells, minDist, undefined, false, undefined));
+      tries.push(...pre[0].nearPlaces(cells, minDist + 2, undefined, false, undefined));
+    } else {
+      const dx = (pre[0].x as number) - (pre[1].x as number);
+      const dy = (pre[0].y as number) - (pre[1].y as number);
+
+      if (dx !== 0 && dy !== 0) {
+        // Crossing point.
+        tries.push(pre[0].x as number, pre[1].y as number);
+        // (Intentional parity with Perl: swapped x/y)
+        tries.push(pre[0].y as number, pre[1].x as number);
+      } else {
+        // Middle point.
+        if (dx === 0) {
+          tries.push(pre[1].x as number, (pre[1].y as number) + Math.trunc(dy / 2));
+        } else {
+          tries.push((pre[1].x as number) + Math.trunc(dx / 2), pre[1].y as number);
+        }
+      }
+
+      for (const n of pre) {
+        tries.push(...n.nearPlaces(cells, minDist, undefined, false, undefined));
+      }
+    }
+  }
+
+  // Placed successors.
+  const sucAll = node.successors();
+  const suc = sucAll.filter((s) => s.x !== undefined && s.y !== undefined);
+  for (const s of suc) {
+    tries.push(...s.nearPlaces(cells, minDist, undefined, false, undefined));
+    tries.push(...s.nearPlaces(cells, minDist + 2, undefined, false, undefined));
+  }
+
+  tries = clearTries(node, cells, tries);
+  if (tryOffset > 0) tries = tries.slice(tryOffset);
+  for (let i = 0; i < tries.length; i += 2) {
+    const x = tries[i];
+    const y = tries[i + 1];
+    if (tryPlaceNodeAt(cells, node, x, y, rankPos, flow)) return;
+  }
+
+  // Generic fallback: scan down in a column.
+  let col = 0;
+  if (pre.length > 0) {
+    col = (node.rank ?? 0) * 2;
+    col = pre[0].x as number;
+  }
+
+  let y = 0;
+  while (cells.has(`${col},${y}`)) y += 2;
+  if (cells.has(`${col},${y - 1}`)) y += 1;
+
+  while (true) {
+    const ok = clearTries(node, cells, [col, y]);
+    if (ok.length !== 0 && tryPlaceNodeAt(cells, node, col, y, rankPos, flow)) return;
+    y += 2;
   }
 }
 
@@ -453,12 +1110,12 @@ function astarModifier(
     add += c instanceof EdgeCell ? 30 : 0;
   }
 
-  if (px !== undefined && py !== undefined && x1 !== undefined && y1 !== undefined) {
+  if (px !== undefined && py !== undefined) {
     // Check whether the new position px,py is a continuation from x1,y1 => x,y.
     const dx1 = directionSign(px - x);
     const dy1 = directionSign(py - y);
-    const dx2 = directionSign(x - x1);
-    const dy2 = directionSign(y - y1);
+    const dx2 = directionSign(x - (x1 ?? 0));
+    const dy2 = directionSign(y - (y1 ?? 0));
     add += dx1 === dx2 || dy1 === dy2 ? 0 : 6;
   }
 
@@ -492,10 +1149,8 @@ function astarBoundaries(cells: CellMap): [number, number, number, number] {
     if (y > maxY) maxY = y;
   }
 
-  // Graph::Easy uses a +/-1 boundary around occupied cells. Since our layouter
-  // does not yet backtrack/re-pack nodes, give A* a bit more room to route
-  // around congested layouts.
-  const pad = 5;
+  // Graph::Easy uses a +/-1 boundary around occupied cells.
+  const pad = 1;
   minX -= pad;
   minY -= pad;
   maxX += pad;
@@ -530,7 +1185,8 @@ function astarNearNodes(
   let type = EDGE_CROSS;
   const current = cells.get(`${nx},${ny}`);
   if (current instanceof EdgeCell) {
-    type = current.type & EDGE_TYPE_MASK;
+    // Deliberately include flags: Graph::Easy only restricts direction for flagless HOR/VER.
+    type = current.type;
   }
   if (type === EDGE_HOR) {
     tries = [
@@ -563,7 +1219,8 @@ function astarNearNodes(
     const cell = cells.get(p);
     if (cell instanceof EdgeCell) {
       // If the existing cell is an VER/HOR edge, then we may cross it.
-      const t = cell.type & EDGE_TYPE_MASK;
+      // Deliberately include flags: Graph::Easy only allows crossing flagless HOR/VER.
+      const t = cell.type;
       if (t === EDGE_HOR || t === EDGE_VER) {
         places.push(x, y);
       }
@@ -724,10 +1381,11 @@ function astar(cells: CellMap, start: number[], stop: number[], edge: Edge, perF
     let t = 0;
     if (cell instanceof EdgeCell) {
       t = cell.type & EDGE_NO_M_MASK;
-    }
-    if (t !== 0 && t !== EDGE_HOR && t !== EDGE_VER) {
-      seedSkippedBadEdge += 1;
-      continue;
+      // Perl only allows seeding on empty cells or plain HOR/VER pieces.
+      if (t !== 0 && t !== EDGE_HOR && t !== EDGE_VER) {
+        seedSkippedBadEdge += 1;
+        continue;
+      }
     }
 
     // For each start point, calculate the distance to each stop point, then use
@@ -835,6 +1493,12 @@ function astar(cells: CellMap, start: number[], stop: number[], edge: Edge, perF
     for (let si = 0; si < stop.length; si += perField) {
       if (x === stop[si] && y === stop[si + 1]) {
         entry[4] = (entry[4] ?? 0) + stop[si + 2];
+        // For shared joints, also store the reached stop's (lx,ly) so the path
+        // reconstruction can compute the proper first/last cell type.
+        if (perField > 3) {
+          entry[6] = stop[si + 3];
+          entry[7] = stop[si + 4];
+        }
         reachedStop = true;
         break STEP;
       }
@@ -906,7 +1570,6 @@ function astar(cells: CellMap, start: number[], stop: number[], edge: Edge, perF
 
   let lx: number | undefined;
   let ly: number | undefined;
-  let labelCell = 0;
 
   const bends: Bend[] = [];
   let idx = 0;
@@ -960,11 +1623,6 @@ function astar(cells: CellMap, start: number[], stop: number[], edge: Edge, perF
     if ((type & EDGE_TYPE_MASK) === 0) type = EDGE_HOR;
 
     const t = type & EDGE_TYPE_MASK;
-    // Do not put the label on crossings.
-    if (labelCell === 0 && !cells.has(xy) && (t === EDGE_HOR || t === EDGE_VER)) {
-      labelCell++;
-      type += EDGE_LABEL_CELL;
-    }
 
     if (type === EDGE_S_E || t === EDGE_S_W || t === EDGE_N_E || t === EDGE_N_W) {
       bends.push([type, cx, cy, -idx]);
@@ -985,11 +1643,154 @@ function astar(cells: CellMap, start: number[], stop: number[], edge: Edge, perF
     straightenPath(path, bends, cells);
   }
 
+  // Ported from Graph::Easy::Layout::Scout::_astar path reconstruction:
+  // the label cell is chosen near the *end* of the path (first straight segment
+  // encountered while walking the path in reverse), and never on crossings.
+  // Note: do this *after* straightening, since straightening rewrites cell types.
+  // Perl sets a label cell even for empty labels; this also prevents EDGE_HOR/EDGE_VER
+  // segments from being compressed to width/height 0 during ASCII sizing.
+  for (let i = path.length - 3; i >= 0; i -= 3) {
+    const x = path[i];
+    const y = path[i + 1];
+    const type = path[i + 2];
+    const edgeType = type & EDGE_TYPE_MASK;
+    if (edgeType !== EDGE_HOR && edgeType !== EDGE_VER) continue;
+    if (cells.has(`${x},${y}`)) continue; // avoid putting labels on crossings
+    if ((type & EDGE_LABEL_CELL) === 0) path[i + 2] = type + EDGE_LABEL_CELL;
+    break;
+  }
+
   return path;
 }
 
+// Shared-port join helpers (ported from Graph::Easy::Layout::Scout.pm).
+
+type JointFieldSpec = readonly [number, number, number, number, number, number];
+
+const NEXT_FIELDS: Record<number, JointFieldSpec> = {
+  [EDGE_VER]: [-1, 0, EDGE_W_N_S, +1, 0, EDGE_E_N_S],
+  [EDGE_HOR]: [0, -1, EDGE_N_E_W, 0, +1, EDGE_S_E_W],
+  [EDGE_N_E]: [0, +1, EDGE_E_N_S, -1, 0, EDGE_N_E_W],
+  [EDGE_N_W]: [0, +1, EDGE_W_N_S, +1, 0, EDGE_N_E_W],
+  [EDGE_S_E]: [0, -1, EDGE_E_N_S, -1, 0, EDGE_S_E_W],
+  [EDGE_S_W]: [0, -1, EDGE_W_N_S, +1, 0, EDGE_S_E_W],
+};
+
+// For Graph::Easy 0.76 these are identical.
+const PREV_FIELDS: Record<number, JointFieldSpec> = NEXT_FIELDS;
+
+function edgesAtPort(node: Node, attr: "start" | "end", side: string, port: number): Edge[] {
+  // Ported from Graph::Easy::Node->edges_at_port.
+  const edges: Edge[] = [];
+  for (const e of node.edges()) {
+    // Skip edges ending here if we look at start.
+    if (e.to === node && attr === "start") continue;
+    // Skip edges starting here if we look at end.
+    if (e.from === node && attr === "end") continue;
+
+    const [s, p] = e.port(attr);
+    if (s === undefined) continue;
+    if (p === undefined) continue;
+    if (s === side && p === port) edges.push(e);
+  }
+  return edges;
+}
+
+function getJoints(
+  shared: Edge[],
+  mask: number,
+  types: Map<string, number>,
+  jointCells: Map<string, number[]>,
+  nextFields: Record<number, JointFieldSpec>
+): number[] {
+  // Ported from Graph::Easy::Layout::Scout::_get_joints.
+  for (const e of shared) {
+    for (const c of e.cells) {
+      const base = c.type & EDGE_TYPE_MASK;
+      const fields = nextFields[base];
+      if (!fields) continue;
+
+      // Don't consider end/start (depending on mask) cells for HOR/VER.
+      if ((base === EDGE_HOR || base === EDGE_VER) && (c.type & mask)) {
+        continue;
+      }
+
+      const px = c.x;
+      const py = c.y;
+
+      for (let i = 0; i < fields.length; i += 3) {
+        const sx = px + fields[i];
+        const sy = py + fields[i + 1];
+        const jt = fields[i + 2];
+
+        const key = `${sx},${sy}`;
+        if (jointCells.has(key)) continue;
+
+        jointCells.set(key, [sx, sy, 0, px, py]);
+        // Keep eventually set start/end points on the original cell.
+        types.set(key, jt + (c.type & EDGE_FLAG_MASK));
+      }
+    }
+  }
+
+  const out: number[] = [];
+  const keys = [...jointCells.keys()].sort(cmpStr);
+  for (const k of keys) {
+    const v = jointCells.get(k);
+    if (!v) continue;
+    out.push(...v);
+  }
+  return out;
+}
+
+function joinEdge(node: Node, edge: Edge, shared: Edge[], cells: CellMap, end?: true): number[] | undefined {
+  // Ported from Graph::Easy::Layout::Scout::_join_edge.
+  let flags: number[] = [
+    EDGE_W_N_S + EDGE_START_W,
+    EDGE_N_E_W + EDGE_START_N,
+    EDGE_E_N_S + EDGE_START_E,
+    EDGE_S_E_W + EDGE_START_S,
+  ];
+
+  if (end || edge.bidirectional) {
+    flags = [
+      EDGE_W_N_S + EDGE_END_W,
+      EDGE_N_E_W + EDGE_END_N,
+      EDGE_E_N_S + EDGE_END_E,
+      EDGE_S_E_W + EDGE_END_S,
+    ];
+  }
+
+  const places = node.nearPlaces(cells, 1, flags, true, undefined);
+
+  for (let i = 0; i < places.length; i += 3) {
+    const x = places[i];
+    const y = places[i + 1];
+    const jointType = places[i + 2];
+
+    const cell = cells.get(`${x},${y}`);
+    if (!(cell instanceof EdgeCell)) continue;
+
+    const cellType = cell.type & EDGE_TYPE_MASK;
+    if (cellType !== EDGE_HOR && cellType !== EDGE_VER) continue;
+
+    // The cell must belong to one of the shared edges.
+    if (!shared.some((e) => e === cell.edge)) continue;
+
+    // Make the cell at the current pos a joint.
+    cell.makeJoint(edge, jointType);
+
+    // The layouter will check that each edge has a cell, so add a dummy one.
+    new EdgeCell(edge, x, y, EDGE_HOLE);
+
+    return [];
+  }
+
+  return undefined;
+}
+
 function findPathAstar(cells: CellMap, edge: Edge): number[] | undefined {
-  // Ported from Graph::Easy::Layout::Scout::_find_path_astar (minimal: no shared-edge joints yet).
+  // Ported from Graph::Easy::Layout::Scout::_find_path_astar.
   const src = edge.from;
   const dst = edge.to;
 
@@ -1011,11 +1812,38 @@ function findPathAstar(cells: CellMap, edge: Edge): number[] | undefined {
   const [sPortSide, sPortPos] = edge.port("start");
   const [ePortSide, ePortPos] = edge.port("end");
 
-  // potential stop positions
-  let B = dst.nearPlaces(cells, 1, endFlags, true, undefined);
-  if (ePortSide !== undefined) {
-    B = dst.allowedPlaces(B, dst.allow(ePortSide, ePortPos), 3);
+  const jointType = new Map<string, number>();
+  const jointTypeEnd = new Map<string, number>();
+  const startCells = new Map<string, number[]>();
+  const endCells = new Map<string, number[]>();
+
+  // End fields first (because maybe an edge runs alongside the node).
+
+  let perField = 5;
+  let B: number[];
+
+  if (ePortSide !== undefined && ePortPos !== undefined) {
+    const sharedEndAll = edgesAtPort(dst, "end", ePortSide, ePortPos);
+    const sharedEnd = sharedEndAll.filter((e) => e.cells.length > 0);
+
+    if (sharedEnd.length > 0) {
+      const joined = joinEdge(src, edge, sharedEnd, cells);
+      if (joined) return joined;
+
+      B = getJoints(sharedEnd, EDGE_START_MASK, jointTypeEnd, endCells, PREV_FIELDS);
+    } else {
+      B = dst.nearPlaces(cells, 1, endFlags, true, undefined);
+      B = dst.allowedPlaces(B, dst.allow(ePortSide, ePortPos), 3);
+      perField = 3;
+    }
+  } else {
+    B = dst.nearPlaces(cells, 1, endFlags, true, undefined);
+    if (ePortSide !== undefined) {
+      B = dst.allowedPlaces(B, dst.allow(ePortSide, ePortPos), 3);
+    }
+    perField = 3;
   }
+
   if (B.length === 0) {
     debugLog({
       runId: debugRunId(),
@@ -1028,51 +1856,145 @@ function findPathAstar(cells: CellMap, edge: Edge): number[] | undefined {
     return undefined;
   }
 
-  // start positions
-  const s = edge.bidirectional ? endFlags : startFlags;
-  let start = src.nearPlaces(cells, 1, s, true, src.shift(-90));
-  if (sPortSide !== undefined) {
-    start = src.allowedPlaces(start, src.allow(sPortSide, sPortPos), 3);
-  }
-  if (start.length === 0) {
-    debugLog({
-      runId: debugRunId(),
-      hypothesisId: "h_start_empty",
-      location: "layout.ts:findPathAstar",
-      edgeId: edge.id,
-      from: { id: src.id, x: src.x, y: src.y, cx: src.cx ?? 1, cy: src.cy ?? 1 },
-      to: { id: dst.id, x: dst.x, y: dst.y, cx: dst.cx ?? 1, cy: dst.cy ?? 1 },
-    });
-    return undefined;
+  // Start fields.
+
+  let A: number[] = [];
+
+  if (sPortSide !== undefined && sPortPos !== undefined) {
+    const sharedStartAll = edgesAtPort(src, "start", sPortSide, sPortPos);
+    const sharedStart = sharedStartAll.filter((e) => e.cells.length > 0);
+
+    if (sharedStart.length > 0) {
+      const joined = joinEdge(dst, edge, sharedStart, cells, true);
+      if (joined) return joined;
+
+      A = getJoints(sharedStart, EDGE_END_MASK, jointType, startCells, NEXT_FIELDS);
+    }
   }
 
-  const A: number[] = [];
-  for (let i = 0; i < start.length; i += 3) {
-    const sx = start[i];
-    const sy = start[i + 1];
-    const type = start[i + 2];
-
-    // compute the field inside the node from where sx,sy is reached
-    let px = sx;
-    let py = sy;
-
-    const srcY = src.y;
-    const srcX = src.x;
-    const srcCx = src.cx ?? 1;
-    const srcCy = src.cy ?? 1;
-
-    if (sy < srcY || sy >= srcY + srcCy) {
-      if (sy < srcY) py = sy + 1;
-      if (sy > srcY) py = sy - 1;
-    } else {
-      if (sx < srcX) px = sx + 1;
-      if (sx > srcX) px = sx - 1;
+  if (A.length === 0) {
+    const s = edge.bidirectional ? endFlags : startFlags;
+    let start = src.nearPlaces(cells, 1, s, true, src.shift(-90));
+    if (sPortSide !== undefined) {
+      start = src.allowedPlaces(start, src.allow(sPortSide, sPortPos), 3);
     }
 
-    A.push(sx, sy, type, px, py);
+    if (start.length === 0) {
+      debugLog({
+        runId: debugRunId(),
+        hypothesisId: "h_start_empty",
+        location: "layout.ts:findPathAstar",
+        edgeId: edge.id,
+        from: { id: src.id, x: src.x, y: src.y, cx: src.cx ?? 1, cy: src.cy ?? 1 },
+        to: { id: dst.id, x: dst.x, y: dst.y, cx: dst.cx ?? 1, cy: dst.cy ?? 1 },
+      });
+      return undefined;
+    }
+
+    for (let i = 0; i < start.length; i += 3) {
+      const sx = start[i];
+      const sy = start[i + 1];
+      const type = start[i + 2];
+
+      // Compute the field inside the node from where sx,sy is reached.
+      let px = sx;
+      let py = sy;
+
+      const srcY = src.y;
+      const srcX = src.x;
+      const srcCx = src.cx ?? 1;
+      const srcCy = src.cy ?? 1;
+
+      if (sy < srcY || sy >= srcY + srcCy) {
+        if (sy < srcY) py = sy + 1;
+        if (sy > srcY) py = sy - 1;
+      } else {
+        if (sx < srcX) px = sx + 1;
+        if (sx > srcX) px = sx - 1;
+      }
+
+      A.push(sx, sy, type, px, py);
+    }
   }
 
-  return astar(cells, A, B, edge, 3);
+  const path = astar(cells, A, B, edge, perField);
+  if (!path) return undefined;
+
+  if (path.length > 0 && startCells.size > 0) {
+    // Convert the edge piece of the starting edge-cell to a joint.
+    const x = path[0];
+    const y = path[1];
+    const xy = `${x},${y}`;
+    const info = startCells.get(xy);
+    if (info) {
+      const px = info[3];
+      const py = info[4];
+      const jt = jointType.get(xy);
+      const base = cells.get(`${px},${py}`);
+      if (!(base instanceof EdgeCell) || jt === undefined) {
+        throw new Error(`Unable to convert start joint at ${px},${py} for edge ${edge.id}`);
+      }
+      base.makeJoint(edge, jt);
+    }
+  }
+
+  if (path.length > 0 && endCells.size > 0) {
+    // Convert the edge piece of the ending edge-cell to a joint.
+    const x = path[path.length - 3];
+    const y = path[path.length - 2];
+    const xy = `${x},${y}`;
+    const info = endCells.get(xy);
+    if (info) {
+      const px = info[3];
+      const py = info[4];
+      const jt = jointTypeEnd.get(xy);
+      const base = cells.get(`${px},${py}`);
+      if (!(base instanceof EdgeCell) || jt === undefined) {
+        throw new Error(`Unable to convert end joint at ${px},${py} for edge ${edge.id}`);
+      }
+      base.makeJoint(edge, jt);
+    }
+  }
+
+  return path;
+}
+
+function findPathLoop(cells: CellMap, edge: Edge): number[] | undefined {
+  // Ported from Graph::Easy::Layout::Scout::_find_path_loop.
+  const src = edge.from;
+
+  // Get a list of possible loop positions.
+  const places = src.nearPlaces(
+    cells,
+    1,
+    [EDGE_LOOP_EAST, EDGE_LOOP_SOUTH, EDGE_LOOP_WEST, EDGE_LOOP_NORTH],
+    false,
+    90
+  );
+
+  // We cannot use Node.shuffleDir() directly here; Graph::Easy tries self-loops
+  // in a different order depending on node flow.
+  const flow = src.flow();
+  let order = [EDGE_LOOP_NORTH, EDGE_LOOP_SOUTH, EDGE_LOOP_WEST, EDGE_LOOP_EAST];
+  if (flow === 270) {
+    order = [EDGE_LOOP_SOUTH, EDGE_LOOP_NORTH, EDGE_LOOP_EAST, EDGE_LOOP_WEST];
+  } else if (flow === 0) {
+    order = [EDGE_LOOP_WEST, EDGE_LOOP_EAST, EDGE_LOOP_SOUTH, EDGE_LOOP_NORTH];
+  } else if (flow === 180) {
+    order = [EDGE_LOOP_EAST, EDGE_LOOP_WEST, EDGE_LOOP_NORTH, EDGE_LOOP_SOUTH];
+  }
+
+  for (const thisTry of order) {
+    for (let i = 0; i < places.length; i += 3) {
+      if (places[i + 2] !== thisTry) continue;
+      const x = places[i];
+      const y = places[i + 1];
+      if (cells.has(`${x},${y}`)) continue;
+      return [x, y, thisTry];
+    }
+  }
+
+  return undefined;
 }
 
 function findPath(graph: Graph, cells: CellMap, edge: Edge): number[] | undefined {
@@ -1080,7 +2002,7 @@ function findPath(graph: Graph, cells: CellMap, edge: Edge): number[] | undefine
   const dst = edge.to;
 
   if (src === dst) {
-    throw new Error(`Self-loop routing is not implemented yet (edge ${edge.id})`);
+    return findPathLoop(cells, edge);
   }
 
   // If one of the two nodes is bigger than 1 cell, or if the edge has ports, use A*
@@ -1240,7 +2162,66 @@ function findPath(graph: Graph, cells: CellMap, edge: Edge): number[] | undefine
   const fallback = findPathAstar(cells, edge);
   if (fallback !== undefined) return fallback;
 
-  throw new Error(`Unable to find path (including A*) for edge ${edge.id} (${edge.from.id} -> ${edge.to.id})`);
+  return undefined;
+}
+
+function edgeDirMask(base: number): number {
+  // N=1, E=2, S=4, W=8
+  switch (base) {
+    case EDGE_CROSS:
+      return 15;
+    case EDGE_HOR:
+      return 10;
+    case EDGE_VER:
+      return 5;
+    case EDGE_N_E:
+      return 3;
+    case EDGE_N_W:
+      return 9;
+    case EDGE_S_E:
+      return 6;
+    case EDGE_S_W:
+      return 12;
+    case EDGE_S_E_W:
+      return 14;
+    case EDGE_N_E_W:
+      return 11;
+    case EDGE_E_N_S:
+      return 7;
+    case EDGE_W_N_S:
+      return 13;
+    default:
+      return 0;
+  }
+}
+
+function edgeBaseFromDirMask(mask: number): number | undefined {
+  switch (mask) {
+    case 15:
+      return EDGE_CROSS;
+    case 10:
+      return EDGE_HOR;
+    case 5:
+      return EDGE_VER;
+    case 3:
+      return EDGE_N_E;
+    case 9:
+      return EDGE_N_W;
+    case 6:
+      return EDGE_S_E;
+    case 12:
+      return EDGE_S_W;
+    case 14:
+      return EDGE_S_E_W;
+    case 11:
+      return EDGE_N_E_W;
+    case 7:
+      return EDGE_E_N_S;
+    case 13:
+      return EDGE_W_N_S;
+    default:
+      return undefined;
+  }
 }
 
 function createCell(cells: CellMap, edge: Edge, x: number, y: number, type: number): void {
@@ -1248,7 +2229,26 @@ function createCell(cells: CellMap, edge: Edge, x: number, y: number, type: numb
   const existing = cells.get(xy);
 
   if (existing instanceof EdgeCell) {
-    existing.makeCross(edge, type & EDGE_FLAG_MASK);
+    const aBase = existing.type & EDGE_TYPE_MASK;
+    const bBase = type & EDGE_TYPE_MASK;
+
+    const mergedBase = edgeBaseFromDirMask(edgeDirMask(aBase) | edgeDirMask(bBase));
+    if (mergedBase === undefined) {
+      throw new Error(`Cannot merge edge cell types at ${x},${y} (${aBase} vs ${bBase})`);
+    }
+
+    const mergedFlags = (existing.type & EDGE_FLAG_MASK) | (type & EDGE_FLAG_MASK);
+
+    // If we are turning a straight hor/ver piece into a crossing, record both edges
+    // so the ASCII renderer can use the correct style for each direction.
+    const existingBase = existing.type & EDGE_TYPE_MASK;
+    const newBase = type & EDGE_TYPE_MASK;
+    if (mergedBase === EDGE_CROSS && (existingBase === EDGE_HOR || existingBase === EDGE_VER) && (newBase === EDGE_HOR || newBase === EDGE_VER)) {
+      existing.makeCross(edge, mergedFlags);
+    } else {
+      existing.type = mergedBase + mergedFlags;
+    }
+
     // Insert a EDGE_HOLE into the cells of the edge (but not into the list of
     // to-be-rendered cells). This cell will be removed by the optimizer later on.
     new EdgeCell(edge, x, y, EDGE_HOLE);
@@ -1263,26 +2263,109 @@ function createCell(cells: CellMap, edge: Edge, x: number, y: number, type: numb
   cells.set(xy, cell);
 }
 
-function tracePath(graph: Graph, cells: CellMap, edge: Edge): void {
+function tracePath(graph: Graph, cells: CellMap, edge: Edge): number | undefined {
   if (edge.from.x === undefined || edge.from.y === undefined || edge.to.x === undefined || edge.to.y === undefined) {
     throw new Error(`Edge ${edge.id} connects unplaced nodes`);
   }
 
   const coords = findPath(graph, cells, edge);
-  if (!coords) {
-    throw new Error(
-      `Unable to find path from ${edge.from.id} (${edge.from.x},${edge.from.y}) to ${edge.to.id} (${edge.to.x},${edge.to.y})`
-    );
-  }
+  if (!coords) return undefined;
 
   // path is empty, happens for sharing edges with only a joint
-  if (coords.length === 0) return;
+  if (coords.length === 0) return 0;
 
   for (let i = 0; i < coords.length; i += 3) {
     const x = coords[i];
     const y = coords[i + 1];
     const type = coords[i + 2];
     createCell(cells, edge, x, y, type);
+  }
+
+  return 0;
+}
+
+function optimizeLayout(graph: Graph, cells: CellMap): void {
+  // Ported from Graph::Easy::Layout::_optimize_layout.
+  //
+  // This compacts consecutive straight EDGE_HOR/EDGE_VER cells into one cell by merging
+  // their cx/cy spans (default 1) and carrying over EDGE_MISC_MASK bits (label/short).
+  // Deleted slots are replaced with Edge::Cell::Empty placeholders.
+  //
+  // It also removes EDGE_HOLE placeholders that were inserted during layout when merging
+  // overlapping edge pieces.
+
+  for (const e of graph.edges) {
+    const edgeCells = e.cells;
+    if (edgeCells.length < 2) continue;
+
+    let f = edgeCells[0];
+    let i = 1;
+
+    while (i < edgeCells.length) {
+      const c = edgeCells[i];
+
+      const t1 = f.type & EDGE_NO_M_MASK;
+      const t2 = c.type & EDGE_NO_M_MASK;
+
+      if (t1 === t2 && (t1 === EDGE_HOR || t1 === EDGE_VER)) {
+        // Carry over misc bits (label/short) from the removed cell.
+        f.type |= c.type & EDGE_MISC_MASK;
+
+        const isHor = t1 === EDGE_HOR;
+        const cSpan = (isHor ? c.cx : c.cy) ?? 1;
+
+        if (isHor) {
+          f.cx = (f.cx ?? 1) + cSpan;
+        } else {
+          f.cy = (f.cy ?? 1) + cSpan;
+        }
+
+        // Drop removed cell from the global cell map.
+        cells.delete(`${c.x},${c.y}`);
+
+        // Placeholder coordinate defaults to the removed cell.
+        let px = c.x;
+        let py = c.y;
+
+        // Reverse order: move merged cell to the new start position.
+        if ((isHor && f.x > c.x) || (!isHor && f.y > c.y)) {
+          px = f.x;
+          py = f.y;
+
+          cells.delete(`${f.x},${f.y}`);
+
+          if (isHor) {
+            f.x -= cSpan;
+          } else {
+            f.y -= cSpan;
+          }
+
+          cells.set(`${f.x},${f.y}`, f);
+        }
+
+        // Remove from edge and replace with placeholder.
+        edgeCells.splice(i, 1);
+        const xy = `${px},${py}`;
+        if (!cells.has(xy)) {
+          cells.set(xy, new EdgeCellEmpty(px, py));
+        }
+        continue;
+      }
+
+      if (c.type === EDGE_HOLE) {
+        // Holes are inserted during layout and removed during optimization.
+        edgeCells.splice(i, 1);
+        if (i >= edgeCells.length) break;
+
+        // Do not combine across holes.
+        f = edgeCells[i];
+        i++;
+        continue;
+      }
+
+      f = c;
+      i++;
+    }
   }
 }
 
@@ -1326,71 +2409,119 @@ export function layoutGraph(graph: Graph): CellMap {
     const aRoot = chainRoot && a.start === chainRoot ? 1 : 0;
     const bRoot = chainRoot && b.start === chainRoot ? 1 : 0;
 
-    return bRoot - aRoot || b.len - a.len || a.start.id.localeCompare(b.start.id);
+    return bRoot - aRoot || b.len - a.len || cmpStr(a.start.id, b.start.id);
   });
 
   for (const c of chainList) {
     todo.push(...c.layout());
   }
 
-  // Leftover nodes + edges.
-  const nodes = [...graph.nodes()].sort((a, b) => a.id.localeCompare(b.id));
+  // Left-over nodes and their edges. Graph::Easy queues edges per-node.
+  // Match Perl ord_values($self->{nodes}) ordering (internal numeric id).
+  const nodes = [...graph.nodes()].sort((a, b) => cmpStr(String(a.numericId), String(b.numericId)));
   for (const n of nodes) {
     todo.push(graph._layoutAction(ACTION_NODE, n, 0));
 
+    // Gather outgoing to-do edges sorted by destination name.
     const edges = n
       .edges()
-      .slice()
-      .sort((a, b) => a.to.id.localeCompare(b.to.id) || a.id - b.id);
+      .filter((e) => e.todo && e.from === n)
+      .sort((a, b) => cmpStr(a.to.id, b.to.id));
 
     for (const e of edges) {
-      if (!e.todo) continue;
       todo.push([ACTION_TRACE, e]);
       e.todo = false;
     }
   }
 
-  // Execute action stack (simplified: no backtracking yet).
-  const cells: CellMap = new Map();
+  if (graph.groups.length > 0) {
+    todo.push([ACTION_SPLICE] as unknown as LayoutAction);
+  }
+
+  // Execute action stack (ported from Graph::Easy::Layout.pm TRY loop).
+  let cells: CellMap = new Map();
   const rankPos = new Map<number, number>();
 
   const flow = graph.flow();
+  let score = 0;
+  let tries = 16;
+  const done: LayoutAction[] = [];
 
-  for (const a of todo) {
-    const at = a[0];
+  while (todo.length > 0) {
+    const action = todo.shift() as unknown as unknown[];
+    done.push(action as unknown as LayoutAction);
+
+    const at = action[0] as number;
+
+    let mod: number | undefined;
+    let src: Node | undefined;
+    let dst: Node | undefined;
 
     if (at === ACTION_NODE) {
-      const [, node] = a as unknown as [number, Node, number, Edge?];
+      const node = action[1] as Node;
+      const tryIndex = action[2] as number;
+      const edge = action[3] as Edge | undefined;
+
       if (node.x === undefined || node.y === undefined) {
-        placeNode(graph, cells, rankPos, flow, node);
+        findNodePlace(graph, cells, rankPos, flow, node, tryIndex, undefined, edge);
       }
-      continue;
-    }
+      mod = 0;
+    } else if (at === ACTION_CHAIN) {
+      const node = action[1] as Node;
+      const tryIndex = action[2] as number;
+      const parent = action[3] as Node;
+      const edge = action[4] as Edge;
 
-    if (at === ACTION_CHAIN) {
-      const [, node] = a as unknown as [number, Node, number, Node, Edge];
       if (node.x === undefined || node.y === undefined) {
-        placeNode(graph, cells, rankPos, flow, node);
+        findNodePlace(graph, cells, rankPos, flow, node, tryIndex, parent, edge);
       }
+      mod = 0;
+    } else if (at === ACTION_TRACE) {
+      const edge = action[1] as Edge;
+      src = edge.from;
+      dst = edge.to;
+
+      if (dst.x === undefined || dst.y === undefined) {
+        findNodePlace(graph, cells, rankPos, flow, dst, 0, undefined, edge);
+      }
+      if (src.x === undefined || src.y === undefined) {
+        findNodePlace(graph, cells, rankPos, flow, src, 0, undefined, edge);
+      }
+
+      mod = tracePath(graph, cells, edge);
+    } else if (at === ACTION_SPLICE) {
+      cells = fillGroupCells(graph, cells);
+      mod = 0;
+    } else {
+      throw new Error(`Illegal action ${String(at)} on layout stack`);
+    }
+
+    if (mod === undefined) {
+      if (at === ACTION_NODE || at === ACTION_CHAIN) {
+        const node = action[1] as Node;
+        if (node.x !== undefined && node.y !== undefined) {
+          unplaceNode(cells, node);
+        }
+
+        (action as unknown as any[])[2] = (action[2] as number) + 1;
+        tries--;
+        if (tries === 0) break;
+
+        todo.unshift(action as unknown as LayoutAction);
+        continue;
+      }
+
+      tries--;
+      if (tries === 0) break;
       continue;
     }
 
-    if (at === ACTION_TRACE) {
-      const [, edge] = a as unknown as [number, Edge];
-
-      if (edge.from.x === undefined || edge.from.y === undefined) {
-        placeNode(graph, cells, rankPos, flow, edge.from);
-      }
-      if (edge.to.x === undefined || edge.to.y === undefined) {
-        placeNode(graph, cells, rankPos, flow, edge.to);
-      }
-
-      tracePath(graph, cells, edge);
-      continue;
-    }
-
-    throw new Error(`Illegal action ${String(at)} on layout stack`);
+    score += mod;
   }
 
-  return fillGroupCells(graph, cells);
+  void score;
+
+  optimizeLayout(graph, cells);
+
+  return cells;
 }
