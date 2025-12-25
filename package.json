@@ -1,0 +1,17 @@
+{
+  "name": "graph-easy-ts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript port of Graph::Easy (0.76) — ASCII output compatible",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "as_ascii": "npm run build --silent && node dist/examples/as_ascii.js",
+    "compare": "npm run build --silent && node dist/scripts/compare.js",
+    "parser_sweep": "npm run build --silent && node dist/scripts/parser_sweep.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
