@@ -1,5 +1,21 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+declare const require: ((id: string) => unknown) | undefined;
+
+type NodeFs = typeof import("fs");
+type NodePath = typeof import("path");
+
+function requireNodeFs(): NodeFs {
+  if (typeof require !== "function") {
+    throw new Error("Parser.fromFile() is only supported in Node.js");
+  }
+  return require("f" + "s") as NodeFs;
+}
+
+function requireNodePath(): NodePath {
+  if (typeof require !== "function") {
+    throw new Error("Parser.fromFile() is only supported in Node.js");
+  }
+  return require("pa" + "th") as NodePath;
+}
 
 import { parseAttributesBlock, type Attributes } from "./attributes";
 import { Graph } from "./graph";
@@ -1467,6 +1483,9 @@ class GraphEasyParser {
 
 export class Parser {
   public static fromFile(filePath: string): Graph {
+    const path = requireNodePath();
+    const fs = requireNodeFs();
+
     const ext = path.extname(filePath).toLowerCase();
     const text = fs.readFileSync(filePath, "utf8");
 

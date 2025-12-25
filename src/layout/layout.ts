@@ -1,5 +1,3 @@
-import { appendFileSync } from "node:fs";
-
 import { EdgeCell } from "./edgeCell";
 import { EdgeCellEmpty } from "./edgeCellEmpty";
 import { GroupCell } from "./groupCell";
@@ -63,17 +61,15 @@ function cmpStr(a: string, b: string): number {
 }
 
 function debugRunId(): string {
-  return process.env.GE_DEBUG_RUN_ID ?? "r1";
+  const p = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process;
+  return p?.env?.GE_DEBUG_RUN_ID ?? "r1";
 }
 
 function debugLog(event: Record<string, unknown>): void {
-  const file = process.env.GE_DEBUG_FILE;
-  if (!file) return;
-  try {
-    appendFileSync(file, JSON.stringify(event) + "\n");
-  } catch {
-    // Best-effort only.
-  }
+  // Browser-safe no-op: the old implementation could append JSON lines to a debug
+  // file in Node. For the website build, we avoid Node-only imports in the layout
+  // path.
+  void event;
 }
 
 function stableInsertByAbsRank(queue: Array<[number, Node]>, elem: [number, Node]): void {

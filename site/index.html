@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Graph::Easy — TS vs Perl</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <!-- WebPerl is served from /webperl (downloaded into site/public/webperl) -->
+    <script src="/webperl/webperl.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <div class="brand__title">Graph::Easy</div>
+          <div class="brand__subtitle">TypeScript port vs original Perl (WebPerl)</div>
+        </div>
+        <div class="topbar__actions">
+          <a class="link" href="https://metacpan.org/dist/Graph-Easy" target="_blank" rel="noreferrer">Graph::Easy 0.76</a>
+          <a class="link" href="https://webperl.zero-g.net/" target="_blank" rel="noreferrer">WebPerl</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="card">
+        <div class="card__header">
+          <div>
+            <div class="card__title">Input</div>
+            <div class="card__hint">Paste Graph::Easy syntax here. Both engines render from the exact same text.</div>
+          </div>
+          <div class="card__headerRight">
+            <button class="button" id="btn-run">Run</button>
+            <button class="button button--ghost" id="btn-reset">Reset example</button>
+          </div>
+        </div>
+        <textarea id="input" class="textarea" spellcheck="false"></textarea>
+      </section>
+
+      <section class="grid3">
+        <div class="card">
+          <div class="card__header">
+            <div>
+              <div class="card__title">TypeScript</div>
+              <div class="card__hint">Runs the TS port in this repo (parse → layout → asAscii).</div>
+            </div>
+            <div class="pill" id="ts-status">idle</div>
+          </div>
+          <pre class="output" id="ts-output"></pre>
+        </div>
+
+        <div class="card">
+          <div class="card__header">
+            <div>
+              <div class="card__title">Perl</div>
+              <div class="card__hint">Original Graph::Easy 0.76 running in-browser via WebPerl.</div>
+            </div>
+            <div class="pill" id="perl-status">loading…</div>
+          </div>
+          <pre class="output" id="perl-output"></pre>
+        </div>
+
+        <div class="card">
+          <div class="card__header">
+            <div>
+              <div class="card__title">Diff</div>
+              <div class="card__hint">Quick visual comparison (line-by-line).</div>
+            </div>
+            <div class="pill" id="diff-status">idle</div>
+          </div>
+          <pre class="output" id="diff-output"></pre>
+        </div>
+      </section>
+
+      <section class="footer">
+        <div class="footer__inner">
+          <div class="footer__left">
+            <div class="mono">Dev:</div>
+            <div class="mono">npm run dev:site</div>
+          </div>
+          <div class="footer__right">
+            <div class="mono">Tip: open devtools console for WebPerl logs.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

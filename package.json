@@ -8,10 +8,14 @@
     "build": "tsc -p tsconfig.json",
     "as_ascii": "npm run build --silent && node dist/examples/as_ascii.js",
     "compare": "npm run build --silent && node dist/scripts/compare.js",
-    "parser_sweep": "npm run build --silent && node dist/scripts/parser_sweep.js"
+    "parser_sweep": "npm run build --silent && node dist/scripts/parser_sweep.js",
+    "dev:site": "vite",
+    "build:site": "vite build",
+    "preview:site": "vite preview"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vite": "^7.3.0"
   }
 }
