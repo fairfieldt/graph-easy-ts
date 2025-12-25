@@ -1868,7 +1868,27 @@ export function renderAscii(graph: Graph): string {
   const graphLabel = graph.graphAttributes.label?.trim() ?? "";
   if (graphLabel === "") return out;
 
+  const labelPosRaw = graph.graphAttributes.labelpos?.trim().toLowerCase() ?? "";
+  const labelPos = labelPosRaw.startsWith("b") ? "bottom" : "top";
+
   const contentLines = out.replace(/\n$/, "").split("\n");
+
+  if (labelPos === "bottom") {
+    const contentWidth = contentLines.reduce((m, l) => Math.max(m, l.length), 0);
+    const labelWidth = graphLabel.length;
+    const overallWidth = Math.max(contentWidth, labelWidth) + 2;
+
+    // Match Graph::Easy's centering bias: when the leftover width is odd, the
+    // drawing is shifted one extra space to the right.
+    const contentPad = Math.max(0, Math.trunc((overallWidth - contentWidth + 1) / 2));
+    const labelPad = Math.max(0, Math.trunc((overallWidth - labelWidth) / 2));
+
+    const paddedContent = contentPad ? contentLines.map((l) => " ".repeat(contentPad) + l) : contentLines;
+    const labelLine = " ".repeat(labelPad) + graphLabel;
+
+    return [...paddedContent, "", labelLine].join("\n") + "\n";
+  }
+
   // Center relative to the framebuffer width (pre-trim), not the trimmed line lengths.
   const width = maxX;
   const pad = Math.max(0, Math.trunc((width - graphLabel.length) / 2));

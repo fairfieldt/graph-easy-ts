@@ -37,8 +37,11 @@ export class Group {
   }
 
   public label(): string {
-    // Graph::Easy does not automatically append ':' to group labels. The colon
-    // only appears when it is part of the group name (e.g. "DMZ:").
+    // Ported from Graph::Easy::Group->label.
+    // Prefer explicit { label: ... } attribute when set; otherwise use the group name.
+    // Do not auto-append ':' (colon only appears when it is part of the provided label/name).
+    const out = this.rawAttribute("label");
+    if (out !== undefined) return out;
     return this.name;
   }
 

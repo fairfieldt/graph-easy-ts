@@ -163,7 +163,15 @@ function tokenizeDot(text: string): Token[] {
 
     const raw = s.slice(start, i);
     if (raw.length) {
-      pushId(raw);
+      // Graph::Easy::Parser::Graphviz treats a digit-prefixed token like "123abc" as
+      // two tokens: "123" and "abc".
+      const m = /^(\d+)([A-Za-z_].*)$/.exec(raw);
+      if (m) {
+        pushId(m[1]);
+        pushId(m[2]);
+      } else {
+        pushId(raw);
+      }
       continue;
     }
 
@@ -430,14 +438,19 @@ class DotParser {
     }
 
     // assignment / edge / node statement
-    const ref = this.parseNodeRef();
-
+    // NOTE: For `key = value` attribute assignments, we must not materialize a node
+    // for `key` (e.g. `label=...` inside a subgraph), so do a token-only lookahead.
+    const pos0 = this.pos;
+    const key = this.parseIdExpr().trim();
     if (this.peekPunct("=")) {
       this.pos++;
       const value = this.parseIdExpr();
-      this.applyAssignment(ref.id, value);
+      this.applyAssignment(key, value);
       return;
     }
+    this.pos = pos0;
+
+    const ref = this.parseNodeRef();
 
     if (this.peekEdgeOp()) {
       this.parseEdgeStatement({ refs: [ref], contributesToEdges: true });
@@ -765,6 +778,19 @@ class DotParser {
           else if (p === "invis") out.shape = "invisible";
           else if (p === "dotted" || p === "dashed" || p === "bold") {
             out.border = `${p}  black`;
+          } else {
+            const m = /setlinewidth\((\d+|\d*\.\d+)\)/.exec(p);
+            if (m) {
+              const width = Math.abs(Number(m[1] || 1));
+              let border = "wide";
+              if (width < 3) border = "solid";
+              else if (width >= 3 && width < 5) border = "bold";
+              else if (width >= 5 && width < 11) border = "broad";
+              // Avoid setting the default border explicitly.
+              if (border !== "solid") {
+                out.border = border;
+              }
+            }
           }
         }
 
