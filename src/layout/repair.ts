@@ -373,8 +373,15 @@ function repairEdges(cells: CellMap): void {
 export function fillGroupCells(graph: Graph, cellsLayout: CellMap): CellMap {
   if (graph.groups.length === 0) return cellsLayout;
 
+  const allGroups: Group[] = [];
+  const collectGroups = (g: Group): void => {
+    allGroups.push(g);
+    for (const child of g.groups) collectGroups(child);
+  };
+  for (const g of graph.groups) collectGroups(g);
+
   // Drop any stale group-cell state from previous layouts.
-  for (const g of graph.groups) {
+  for (const g of allGroups) {
     g._clearCells();
   }
 
@@ -399,13 +406,13 @@ export function fillGroupCells(graph: Graph, cellsLayout: CellMap): CellMap {
   insertGroupFillers(cells);
   closeGroupHoles(cells);
 
-  for (const g of graph.groups) {
+  for (const g of allGroups) {
     g._setCellTypes(cells);
   }
 
   repairEdges(cells);
 
-  for (const g of graph.groups) {
+  for (const g of allGroups) {
     g._findLabelCell();
   }
 

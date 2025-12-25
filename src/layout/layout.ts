@@ -687,6 +687,27 @@ function findNodePlace(
   // Ported from Graph::Easy::Layout::Path::_find_node_place (Graph-Easy 0.76).
   if (node.x !== undefined && node.y !== undefined) return;
 
+  // Relative-placement nodes (origin/offset): if the origin-chain isn't placed yet,
+  // we sometimes need to place the grandparent first to avoid shifting the whole
+  // cluster (e.g. Wide/B/C in 6_multicell_offset). However, autosplit record parts
+  // can have edges to nodes outside the origin-cluster; in that case, the part's
+  // placement may legitimately anchor the cluster.
+  if (node.origin && node.origin !== node) {
+    const org = node.origin;
+    const grandpa = node.findGrandparent();
+
+    const hasExternalEdge = node.edges().some((e) => {
+      return e.from.findGrandparent() !== grandpa || e.to.findGrandparent() !== grandpa;
+    });
+
+    if (!hasExternalEdge && (org.x === undefined || org.y === undefined)) {
+      if (grandpa !== node && (grandpa.x === undefined || grandpa.y === undefined)) {
+        findNodePlace(graph, cells, rankPos, flow, grandpa, tryIndex, parent, edge);
+        if (node.x !== undefined && node.y !== undefined) return;
+      }
+    }
+  }
+
   // Relative placement (Graph::Easy::Node->relative_to).
   // If the node has an origin, try to place it at origin + (dx,dy).
   if (node.origin && node.origin !== node) {

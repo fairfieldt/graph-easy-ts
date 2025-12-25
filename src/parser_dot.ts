@@ -229,27 +229,6 @@ function mapDotNodeShape(shapeRaw: string): string {
   return s;
 }
 
-function splitRecordFields(label: string): string[] {
-  const fields: string[] = [];
-  let cur = "";
-  for (let i = 0; i < label.length; i++) {
-    const ch = label[i];
-    if (ch === "\\" && i + 1 < label.length) {
-      cur += label.slice(i, i + 2);
-      i++;
-      continue;
-    }
-    if (ch === "|") {
-      fields.push(cur);
-      cur = "";
-      continue;
-    }
-    cur += ch;
-  }
-  fields.push(cur);
-  return fields;
-}
-
 function removeRecordPortTags(text: string): string {
   // Remove "<port>" tokens at the start of record fields.
   return text.replace(/(^|\|)\s*<[^>]*>/g, "$1");
@@ -273,11 +252,46 @@ function parseRecord(labelRaw: string, flow: string): { displayLabel: string; po
     }
   }
 
-  const rawFields = splitRecordFields(label);
   const ports: (string | undefined)[] = [];
+  let remaining = label;
+  let add = 0;
 
-  for (const f of rawFields) {
-    const m = /^\s*<([^>]*)>/.exec(f);
+  while (remaining !== "") {
+    // Regex-equivalent of: ^((\\\||[^\|])*)(\|\|?|\z)
+    let i = 0;
+    while (i < remaining.length) {
+      const ch = remaining[i];
+      if (ch === "|") break;
+      if (ch === "\\" && i + 1 < remaining.length && remaining[i + 1] === "|") {
+        i += 2;
+        continue;
+      }
+      i += 1;
+    }
+
+    const partRaw = remaining.slice(0, i);
+
+    let sep = "";
+    let sepLen = 0;
+    if (i < remaining.length && remaining[i] === "|") {
+      if (i + 1 < remaining.length && remaining[i + 1] === "|") {
+        sep = "||";
+        sepLen = 2;
+      } else {
+        sep = "|";
+        sepLen = 1;
+      }
+    }
+
+    remaining = remaining.slice(i + sepLen);
+
+    // fix [|G|] to have one empty part as last part
+    if (add === 0 && remaining === "" && (sep === "|" || sep === "||")) {
+      add += 1;
+      remaining += "|";
+    }
+
+    const m = /^\s*<([^>]*)>/.exec(partRaw);
     ports.push(m ? m[1] : undefined);
   }
 
@@ -856,34 +870,134 @@ class DotParser {
         if (p) portIndexByName.set(p, idx);
       }
 
-      // Create port nodes.
-      for (let idx = 0; idx < ports.length; idx++) {
-        const partId = `${base}.${idx}`;
-        const part = this.graph.addNode(partId);
+      // Copy all attributes except 'shape' and 'label'.
+      const copied: Attributes = newAttrs();
+      for (const [k, v] of Object.entries(n.attributes)) {
+        if (k === "shape" || k === "label") continue;
+        copied[k] = v;
+      }
+      const hasCopiedAttrs = Object.keys(copied).length > 0;
 
-        // Copy all attributes except 'shape' and 'label'.
-        const copied: Attributes = newAttrs();
-        for (const [k, v] of Object.entries(n.attributes)) {
-          if (k === "shape" || k === "label") continue;
-          copied[k] = v;
+      // Materialize the record as a Graph::Easy autosplit cluster (basename.idx),
+      // matching Graph::Easy::Parser::_autosplit_node.
+      let firstInRow: Node | undefined;
+      let x = 0;
+      let y = 0;
+      let idx = 0;
+      let remaining = displayLabel;
+      let lastSep = "";
+      let add = 0;
+      const created: Node[] = [];
+
+      while (remaining !== "") {
+        // Regex-equivalent of: ^((\\\||[^\|])*)(\|\|?|\z)
+        let i = 0;
+        while (i < remaining.length) {
+          const ch = remaining[i];
+          if (ch === "|") break;
+          if (ch === "\\" && i + 1 < remaining.length && remaining[i + 1] === "|") {
+            i += 2;
+            continue;
+          }
+          i += 1;
         }
-        part.setAttributes(copied);
 
-        // Mark autosplit metadata.
-        part.setAttributes({ autosplit_basename: base, autosplit_portname: ports[idx] ?? String(idx) });
+        const partRaw = remaining.slice(0, i);
+        const partWasEmpty = partRaw === "";
 
-        // Remove record-shape marker from parts.
-        delete part.attributes.shape;
-
-        // Part 0 acts as the display node.
-        if (idx === 0) {
-          part.label = displayLabel;
-          if (cleanedBasename !== displayLabel) {
-            part.setAttributes({ basename: cleanedBasename });
+        let sep = "";
+        let sepLen = 0;
+        if (i < remaining.length && remaining[i] === "|") {
+          if (i + 1 < remaining.length && remaining[i + 1] === "|") {
+            sep = "||";
+            sepLen = 2;
+          } else {
+            sep = "|";
+            sepLen = 1;
           }
         }
 
-        this.addNodeToCurrentGroup(part);
+        remaining = remaining.slice(i + sepLen);
+        const remainingAfterSep = remaining;
+
+        // Perl uses $1 || ' ' (empty parts become a single space).
+        let part = partWasEmpty ? " " : partRaw;
+
+        // fix [|G|] to have one empty part as last part
+        if (add === 0 && remaining === "" && (sep === "|" || sep === "||")) {
+          add += 1;
+          remaining += "|";
+        }
+
+        // Determine whether to create a borderless empty node or a bordered empty node.
+        let isEmptyBorderless = false;
+        if (partWasEmpty) {
+          isEmptyBorderless = true;
+        } else if (/^[ ]+$/.test(part)) {
+          if (partRaw.length === 1) {
+            const isRowStart = lastSep === "" || lastSep === "||";
+            const hasRightPart = remainingAfterSep !== "";
+            if (isRowStart || !hasRightPart) {
+              isEmptyBorderless = true;
+            } else {
+              part = " ";
+            }
+          } else {
+            // Explicit multi-space parts create an empty node *with* a border.
+            part = " ";
+          }
+        } else {
+          // strip spaces at front/end
+          part = part.trim();
+        }
+
+        const partId = `${base}.${idx}`;
+        const node = this.graph.addNode(partId);
+        if (hasCopiedAttrs) node.setAttributes(copied);
+        if (isEmptyBorderless) node.setAttributes({ shape: "invisible" });
+
+        node.label = part;
+        node.setAttributes({
+          autosplit_basename: base,
+          autosplit_xy: `${x},${y}`,
+          autosplit_portname: ports[idx] ?? String(idx),
+        });
+
+        // Relative placement.
+        if (idx === 0) {
+          firstInRow = node;
+          if (cleanedBasename !== "") {
+            node.setAttributes({ basename: cleanedBasename });
+          }
+        } else {
+          let origin: Node | undefined = created[created.length - 1];
+          let sx = 1;
+          let sy = 0;
+          if (lastSep === "||") {
+            origin = firstInRow;
+            sx = 0;
+            sy = 1;
+            firstInRow = node;
+          }
+          if (!origin) {
+            throw new Error(`splitRecordNodes: missing origin for ${partId}`);
+          }
+          node.origin = origin;
+          node.dx = sx;
+          node.dy = sy;
+          origin.children.set(node.id, node);
+        }
+
+        this.addNodeToCurrentGroup(node);
+        created.push(node);
+
+        idx += 1;
+        lastSep = sep;
+        x += 1;
+        if (sep === "||") {
+          x = 0;
+          y += 1;
+        }
       }
 
       // Remove the helper record node.

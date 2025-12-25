@@ -160,9 +160,16 @@ export class Graph {
     const edge = new Edge(this.nextEdgeId++, actualFrom, actualTo, leftOp, rightOp, label);
     edge.setAttributes(this.defaultEdgeAttributes);
 
-    // If no explicit style was provided via attributes, infer it from the edge operator.
-    if (edge.attribute("style").trim() === "") {
-      edge.setAttributes({ style: inferEdgeStyleFromOperators(leftOp, rightOp) });
+    // Graph::Easy encodes the edge line style directly in the operator token.
+    // However, Graphviz-style defaults like `edge { style: invisible }` are used
+    // for layout-only edges: solid edges stay invisible, while non-solid operator
+    // styles (dashed/dotted/double/...) still render.
+    const operatorStyle = inferEdgeStyleFromOperators(leftOp, rightOp);
+    const currentStyle = edge.attribute("style").trim().toLowerCase();
+    if (!currentStyle) {
+      edge.setAttributes({ style: operatorStyle });
+    } else if (currentStyle === "invisible" && operatorStyle !== "solid") {
+      edge.setAttributes({ style: operatorStyle });
     }
 
     edge.graph = this;

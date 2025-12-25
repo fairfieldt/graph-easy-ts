@@ -446,6 +446,44 @@ function correctSizeNode(node: Node, cells: CellMap): void {
   node.h = h;
 }
 
+const POINT_SHAPES_ASCII: Record<string, Record<string, string>> = {
+  filled: {
+    star: "*",
+    square: "#",
+    dot: ".",
+    circle: "o",
+    cross: "+",
+    diamond: "<>",
+    x: "X",
+  },
+  closed: {
+    star: "*",
+    square: "#",
+    dot: ".",
+    circle: "o",
+    cross: "+",
+    diamond: "<>",
+    x: "X",
+  },
+};
+
+function pointStyle(node: Node): string {
+  let shape = node.attribute("pointshape").trim().toLowerCase();
+  let style = node.attribute("pointstyle").trim().toLowerCase();
+
+  if (shape === "") shape = "star";
+  if (shape === "invisible") return "";
+
+  if (/^(star|square|dot|circle|cross|diamond)$/.test(style)) {
+    shape = style;
+    style = "filled";
+  }
+
+  if (style === "") style = "filled";
+
+  return POINT_SHAPES_ASCII[style]?.[shape] ?? "";
+}
+
 function correctSizeGroupCell(cell: GroupCell): void {
   if (cell.w !== undefined && cell.h !== undefined) return;
 
@@ -574,6 +612,12 @@ function prepareLayout(cells: CellMap): { rows: Map<number, number>; cols: Map<n
     } else {
       continue;
     }
+
+    // Ensure every seen coordinate has a row/col entry (even if size 0). Perl's
+    // _prepare_layout initializes row/col maps for all cells, and later sizing
+    // logic (nextDefined) assumes keys exist.
+    if (!rowSizes.has(y)) rowSizes.set(y, 0);
+    if (!colSizes.has(x)) colSizes.set(x, 0);
 
     // Set the minimum cell size only for single-celled objects.
     if (cx + cy === 2) {
@@ -1527,6 +1571,15 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
     const lw = w - ws - xs;
     const lh = h - hs - ys;
     printfbAligned(fb, absX + xs, absY + ys, lw, lh, label, "bottom");
+    return;
+  }
+
+  if (shape === "point") {
+    // Graph::Easy::As_ascii.pm: ASCII point nodes only draw the glyph (no label).
+    const glyph = pointStyle(node);
+    if (glyph) {
+      putText(fb, absX + 2, absY + (h - 2), glyph);
+    }
     return;
   }
 

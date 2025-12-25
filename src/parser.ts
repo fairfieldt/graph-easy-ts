@@ -118,6 +118,50 @@ function splitTopLevel(input: string, sep: string): string[] {
   return parts;
 }
 
+function stripLineComment(rawLine: string): string {
+  // Graph::Easy treats '#' as a comment delimiter (unless it's inside a block like
+  // "[...]" or "{...}" where '#' can appear in values like hex colors).
+  let square = 0;
+  let curly = 0;
+  let paren = 0;
+  let escaped = false;
+  let quote: '"' | "'" | undefined;
+
+  for (let i = 0; i < rawLine.length; i++) {
+    const ch = rawLine[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch as '"' | "'";
+      continue;
+    }
+
+    if (ch === "[") square++;
+    else if (ch === "]" && square > 0) square--;
+    else if (ch === "{") curly++;
+    else if (ch === "}" && curly > 0) curly--;
+    else if (ch === "(") paren++;
+    else if (ch === ")" && paren > 0) paren--;
+
+    if (ch === "#" && square === 0 && curly === 0 && paren === 0) {
+      return rawLine.slice(0, i).trimEnd();
+    }
+  }
+
+  return rawLine;
+}
+
 function parseSquareBlock(s: string, pos: number): ParseBlock {
   if (s[pos] !== "[") {
     throw new Error(`Expected '[' at pos ${pos}`);
@@ -625,9 +669,8 @@ class GraphEasyParser {
   }
 
   private parseLogicalLine(rawLine: string): void {
-    let line = rawLine.trim();
+    let line = stripLineComment(rawLine).trim();
     if (!line) return;
-    if (line.startsWith("#")) return;
 
     // Cross-line list fanout applies only to the *immediately following* logical line.
     // Capture+clear it up-front so it can't leak further.
@@ -878,6 +921,21 @@ class GraphEasyParser {
         }
 
         this.pendingEdge = undefined;
+
+        // Ensure comma-target fanout on the *same logical line* works even when the
+        // edge spec was provided on the previous line (e.g. "[Dachau] ->" newline
+        // "[Berlin], [Ulm], ...").
+        this.lastCreatedEdge = {
+          from: pending.from,
+          leftOp: pending.leftOp,
+          rightOp: pending.rightOp,
+          label: pending.label,
+          attrs: pending.attrs,
+        };
+        commaEdgeList = this.lastCreatedEdge;
+        commaFanoutSources = pending.fanoutSources;
+        commaTargetNodes = [to];
+        commaTargetMergedAttrs = nodeRes.attrs ? { ...nodeRes.attrs } : undefined;
 
         this.lastChainNode = to;
 

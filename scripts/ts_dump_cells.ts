@@ -79,7 +79,9 @@ function dump(graph: Graph, file: string) {
     }
 
     if (cell instanceof GroupCell) {
-      console.log(`CELL\t${x}\t${y}\tGROUPCELL\tname=${cell.group.name}\ttype=${str((cell as any).type)}`);
+      console.log(
+        `CELL\t${x}\t${y}\tGROUPCELL\tname=${cell.group.name}\tclass=${str(cell.cellClass)}\thasLabel=${cell.hasLabel ? 1 : 0}\tlabel=${str(cell.label)}\tw=${str(cell.w)}\th=${str(cell.h)}\tcx=${str(cell.cx)}\tcy=${str(cell.cy)}\tborderstyle=${str(cell.group.attribute('borderstyle'))}\tlabelpos=${str(cell.group.attribute('labelpos'))}`,
+      );
       continue;
     }
 
