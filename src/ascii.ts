@@ -424,13 +424,23 @@ function correctSizeNode(node: Node, cells: CellMap): void {
   const { lines } = alignedLabel(node.labelText(), align, wrap);
   const dims = labelDimensions(lines);
 
+  // Graph::Easy still renders an explicitly-empty label as a normal node box with
+  // a single blank interior row. alignedLabel("", ...) returns 0 lines, so treat
+  // that as a 1x1 blank label for sizing.
+  let labelW = dims.w;
+  let labelH = dims.h;
+  if (labelH === 0) {
+    labelW = 1;
+    labelH = 1;
+  }
+
   const border = nodeBorderStyleName(node);
   const sides = nodeBorderSides(node, cells);
 
   // Ported from Graph::Easy::Node::_correct_size.
   // Base sizing: width = label width + 2, height = label height.
-  let w = dims.w + 2;
-  let h = dims.h;
+  let w = labelW + 2;
+  let h = labelH;
 
   if (border !== "none") {
     if (sides.left !== "none") w += 1;

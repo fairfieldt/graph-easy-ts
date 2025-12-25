@@ -311,14 +311,6 @@ function parseRecord(labelRaw: string, flow: string): { displayLabel: string; po
   return { displayLabel: display, ports };
 }
 
-function applyDefaultsIfUnset(node: Node, defaults: Attributes): void {
-  for (const [k, v] of Object.entries(defaults)) {
-    if (!(k in node.attributes)) {
-      node.attributes[k] = v;
-    }
-  }
-}
-
 class DotParser {
   private readonly tokens: Token[];
   private pos = 0;
@@ -370,6 +362,11 @@ class DotParser {
 
     const recordInfo = this.splitRecordNodes();
     this.materializeEdges(recordInfo);
+
+    // Graphviz label escapes like "\\G" and "\\N" are expanded during rendering
+    // in Graph::Easy; do the same here so ASCII output matches the canonical DOT
+    // fixtures.
+    this.expandGraphvizLabels();
 
     return this.graph;
   }
@@ -576,7 +573,7 @@ class DotParser {
       refs.push(ref);
 
       const node = this.graph.addNode(ref.id);
-      applyDefaultsIfUnset(node, scopedNodeDefaults);
+      node.setAttributes(scopedNodeDefaults);
     }
 
     this.expectPunct("}");
@@ -1052,16 +1049,101 @@ class DotParser {
     }
   }
 
+  private expandGraphvizLabels(): void {
+    const graphName = this.graph.graphAttributes.title ?? "";
+
+    if ("label" in this.graph.graphAttributes) {
+      this.graph.graphAttributes.label = this.expandGraphvizLabel(this.graph.graphAttributes.label, { graphName });
+    }
+
+    for (const node of this.graph.nodes()) {
+      if ("label" in node.attributes) {
+        node.attributes.label = this.expandGraphvizLabel(node.attributes.label, { graphName, nodeName: node.id });
+      }
+    }
+
+    for (const edge of this.graph.edges) {
+      const raw = "label" in edge.attributes ? edge.attributes.label : edge.label;
+
+      const tail = edge.from.id;
+      const head = edge.to.id;
+
+      // Graphviz renders \E as "tail->head" for directed edges.
+      const directed = edge.rightOp.includes(">") || edge.leftOp.includes(">");
+      const edgeName = `${tail}${directed ? "->" : "--"}${head}`;
+
+      edge.attributes.label = this.expandGraphvizLabel(raw, {
+        graphName,
+        tailName: tail,
+        headName: head,
+        edgeName,
+      });
+    }
+  }
+
+  private expandGraphvizLabel(
+    raw: string,
+    ctx: {
+      graphName: string;
+      nodeName?: string;
+      tailName?: string;
+      headName?: string;
+      edgeName?: string;
+    }
+  ): string {
+    let out = raw;
+
+    out = out.replace(/\\G/g, ctx.graphName);
+
+    if (ctx.nodeName !== undefined) out = out.replace(/\\N/g, ctx.nodeName);
+    if (ctx.tailName !== undefined) out = out.replace(/\\T/g, ctx.tailName);
+    if (ctx.headName !== undefined) out = out.replace(/\\H/g, ctx.headName);
+    if (ctx.edgeName !== undefined) out = out.replace(/\\E/g, ctx.edgeName);
+
+    return out;
+  }
+
   private resolveNodeRef(ref: NodeRef, recordInfo: Map<string, RecordInfo>, side: "from" | "to", attrs: Attributes): Node {
     const base = ref.id;
     const rec = recordInfo.get(base);
 
     let nodeId = base;
 
+    // Graphviz allows `node:compass` when no explicit port is provided. In record
+    // nodes, this is ambiguous with port names (e.g. `w` could be a port name),
+    // so we disambiguate here using the parsed record port list.
+    let compass = ref.compass;
+
     if (ref.port) {
+      const portLower = ref.port.trim().toLowerCase();
+      const isCompassOnly = /^(n|ne|e|se|s|sw|w|nw)$/.test(portLower);
+
       if (rec) {
-        const idx = rec.portIndexByName.get(ref.port);
-        nodeId = `${base}.${idx ?? 0}`;
+        const idxExact = rec.portIndexByName.get(ref.port);
+        if (idxExact !== undefined) {
+          nodeId = `${base}.${idxExact}`;
+        } else if (isCompassOnly) {
+          // `node:s` where no matching record port exists is treated as a compass
+          // point. If a record port differs only by case (e.g. `S`), Graph::Easy
+          // resolves it to that port and also sets the start/end direction.
+          compass ??= ref.port;
+
+          let idxCi: number | undefined;
+          for (const [name, idx] of rec.portIndexByName.entries()) {
+            if (name.trim().toLowerCase() === portLower) {
+              idxCi = idx;
+              break;
+            }
+          }
+
+          nodeId = `${base}.${idxCi ?? 0}`;
+        } else {
+          nodeId = `${base}.0`;
+        }
+      } else if (!compass && isCompassOnly) {
+        // `node:s` with no record ports -> compass-only attachment.
+        compass = ref.port;
+        nodeId = base;
       } else {
         nodeId = `${base}:${ref.port}`;
       }
@@ -1071,9 +1153,10 @@ class DotParser {
 
     const node = this.graph.addNode(nodeId);
 
-    // Handle port compass overrides ("node:port:ne").
-    if (ref.compass) {
-      const d = compassToDir(ref.compass);
+    // Handle port compass overrides ("node:port:ne") and compass-only endpoints
+    // ("node:s").
+    if (compass) {
+      const d = compassToDir(compass);
       if (side === "from") attrs.start = attrs.start ?? d;
       else attrs.end = attrs.end ?? d;
     }
