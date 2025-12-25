@@ -375,13 +375,22 @@ function correctSizeNode(node: Node, cells: CellMap): void {
     const align = alignName(node, "left");
     const wrap = textwrapName(node);
     const { lines } = alignedLabel(node.labelText(), align, wrap);
+
+    // Graph::Easy treats whitespace-only labels as "no label" for sizing.
+    const hasVisibleLabel = lines.some((l) => l !== "");
     let { w, h } = labelDimensions(lines);
 
-    // Match Edge::Cell::_correct_size for EDGE_HOR + EDGE_LABEL_CELL.
-    // - Base cell is 5x3.
+    if (!hasVisibleLabel) {
+      w = 0;
+      h = 0;
+    }
+
+    // Graph::Easy sizes these nodes slightly differently than Edge::Cell::_correct_size:
+    // - Empty labels shrink to 3x3.
+    // - Non-empty labels have a base width of 4 (plus label width).
     // - Label height shares the baseline line row, so subtract 1 when non-empty.
-    const baseW = 5;
     const baseH = 3;
+    const baseW = h === 0 ? 3 : 4;
     if (h !== 0) h -= 1;
 
     node.w = baseW + w;
@@ -1521,6 +1530,10 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
     return;
   }
 
+  // Graph::Easy::As_ascii.pm: for ASCII output, rounded nodes render with blank corners.
+  // (Unicode rounded corners are only used in boxart output.)
+  const rounded = shape === "rounded";
+
   const border = nodeBorderStyleName(node);
   const sides = nodeBorderSides(node, cells);
   const topStyle = sides.top;
@@ -1568,8 +1581,12 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
       const st = nodeBorderStyle(topStyle);
       const tlStyle = top && left ? mergeBordersCorner(topStyle, leftStyle) : "none";
       const trStyle = top && right ? mergeBordersCorner(topStyle, rightStyle) : "none";
-      const tl = tlStyle !== "none" ? nodeBorderStyle(tlStyle).ul : undefined;
-      const tr = trStyle !== "none" ? nodeBorderStyle(trStyle).ur : undefined;
+      let tl = tlStyle !== "none" ? nodeBorderStyle(tlStyle).ul : undefined;
+      let tr = trStyle !== "none" ? nodeBorderStyle(trStyle).ur : undefined;
+      if (rounded) {
+        if (tl !== undefined) tl = " ";
+        if (tr !== undefined) tr = " ";
+      }
       horLine(0, st.horTop, tl, tr);
     }
 
@@ -1577,8 +1594,12 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
       const st = nodeBorderStyle(bottomStyle);
       const blStyle = bottom && left ? mergeBordersCorner(bottomStyle, leftStyle) : "none";
       const brStyle = bottom && right ? mergeBordersCorner(bottomStyle, rightStyle) : "none";
-      const bl = blStyle !== "none" ? nodeBorderStyle(blStyle).ll : undefined;
-      const br = brStyle !== "none" ? nodeBorderStyle(brStyle).lr : undefined;
+      let bl = blStyle !== "none" ? nodeBorderStyle(blStyle).ll : undefined;
+      let br = brStyle !== "none" ? nodeBorderStyle(brStyle).lr : undefined;
+      if (rounded) {
+        if (bl !== undefined) bl = " ";
+        if (br !== undefined) br = " ";
+      }
       if (leftNeighborBorderless && left) {
         // For borderless-left neighbors, Graph::Easy leaves the bottom-left corner blank.
         // Because our framebuffer writer treats spaces as no-ops, avoid writing the
@@ -1621,30 +1642,33 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
     }
 
     // Corner override (only when both incident borders are present).
-    if (top && left) {
-      const cs = nodeBorderStyle(mergeBordersCorner(topStyle, leftStyle));
-      if (leftNeighborBorderless) {
-        const st = nodeBorderStyle(leftStyle);
-        putChar(fb, drawX, absY, st.verLeft[0] ?? " ");
-      } else {
-        putChar(fb, drawX, absY, cs.ul);
+    // Rounded nodes intentionally keep corners blank in ASCII output.
+    if (!rounded) {
+      if (top && left) {
+        const cs = nodeBorderStyle(mergeBordersCorner(topStyle, leftStyle));
+        if (leftNeighborBorderless) {
+          const st = nodeBorderStyle(leftStyle);
+          putChar(fb, drawX, absY, st.verLeft[0] ?? " ");
+        } else {
+          putChar(fb, drawX, absY, cs.ul);
+        }
       }
-    }
-    if (top && right) {
-      const cs = nodeBorderStyle(mergeBordersCorner(topStyle, rightStyle));
-      putChar(fb, drawX + w - 1, absY, cs.ur);
-    }
-    if (bottom && left) {
-      const cs = nodeBorderStyle(mergeBordersCorner(bottomStyle, leftStyle));
-      if (leftNeighborBorderless) {
-        putChar(fb, drawX, absY + h - 1, " ");
-      } else {
-        putChar(fb, drawX, absY + h - 1, cs.ll);
+      if (top && right) {
+        const cs = nodeBorderStyle(mergeBordersCorner(topStyle, rightStyle));
+        putChar(fb, drawX + w - 1, absY, cs.ur);
       }
-    }
-    if (bottom && right) {
-      const cs = nodeBorderStyle(mergeBordersCorner(bottomStyle, rightStyle));
-      putChar(fb, drawX + w - 1, absY + h - 1, cs.lr);
+      if (bottom && left) {
+        const cs = nodeBorderStyle(mergeBordersCorner(bottomStyle, leftStyle));
+        if (leftNeighborBorderless) {
+          putChar(fb, drawX, absY + h - 1, " ");
+        } else {
+          putChar(fb, drawX, absY + h - 1, cs.ll);
+        }
+      }
+      if (bottom && right) {
+        const cs = nodeBorderStyle(mergeBordersCorner(bottomStyle, rightStyle));
+        putChar(fb, drawX + w - 1, absY + h - 1, cs.lr);
+      }
     }
   }
 

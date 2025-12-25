@@ -20,6 +20,7 @@ type PendingEdge = {
   rightOp: string;
   label: string;
   attrs?: Attributes;
+  fanoutSources?: Node[];
 };
 
 function skipWs(s: string, pos: number): number {
@@ -258,6 +259,29 @@ class GraphEasyParser {
   public parse(text: string): Graph {
     const rawLines = text.replace(/\r\n?/g, "\n").split("\n");
 
+    // When joining multi-line statements, we normally trim the continuation line.
+    // However, inside an unterminated [...] node label, leading spaces are
+    // semantically significant for autosplit/record empty cells (e.g. "  ||").
+    // So in that case we only trim the *end* of the continuation line.
+    const inUnclosedSquare = (s: string): boolean => {
+      let square = 0;
+      let escaped = false;
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === "[") square += 1;
+        else if (ch === "]" && square > 0) square -= 1;
+      }
+      return square > 0;
+    };
+
     const logicalLines: string[] = [];
     for (let i = 0; i < rawLines.length; i++) {
       let line = rawLines[i];
@@ -279,10 +303,12 @@ class GraphEasyParser {
       }
 
       while (!isBalancedForLine(line) && i + 1 < rawLines.length) {
-        const nextTrim = rawLines[i + 1].trim();
+        const nextRaw = rawLines[i + 1];
+        const nextTrim = nextRaw.trim();
+        const nextForJoin = inUnclosedSquare(line) ? nextRaw.trimEnd() : nextTrim;
         i++;
         // Perl parser inserts a space for most multi-line joins.
-        line += " " + nextTrim;
+        line += " " + nextForJoin;
 
         // Graph-Easy multiline blocks often close with a dedicated "}" line. We
         // treat that as an unconditional terminator even if values inside the
@@ -313,9 +339,11 @@ class GraphEasyParser {
             line += " " + rawLines[i].trim();
 
             while (!isBalancedForLine(line) && i + 1 < rawLines.length) {
-              const nextTrim = rawLines[i + 1].trim();
+              const nextRaw = rawLines[i + 1];
+              const nextTrim = nextRaw.trim();
+              const nextForJoin = inUnclosedSquare(line) ? nextRaw.trimEnd() : nextTrim;
               i++;
-              line += " " + nextTrim;
+              line += " " + nextForJoin;
               if (nextTrim === "}") break;
             }
           }
@@ -825,18 +853,30 @@ class GraphEasyParser {
       // If we have a pending edge from the previous logical line, and the next
       // statement begins with a node, connect it.
       if (this.pendingEdge && part.trimStart().startsWith("[")) {
+        const pending = this.pendingEdge;
         const trimmed = part.trimStart();
         const nodeRes = this.parseNodeAt(trimmed, 0);
         const to = nodeRes.node;
         this.lastParsedNodeAttrs = nodeRes.attrs;
         const edge = this.graph.addEdge(
-          this.pendingEdge.from,
+          pending.from,
           to,
-          this.pendingEdge.leftOp,
-          this.pendingEdge.rightOp,
-          this.pendingEdge.label
+          pending.leftOp,
+          pending.rightOp,
+          pending.label
         );
-        if (this.pendingEdge.attrs) edge.setAttributes(this.pendingEdge.attrs);
+        if (pending.attrs) edge.setAttributes(pending.attrs);
+
+        // Cross-line list fanout: if this pending edge originated from a node list,
+        // create the full fanout when the target node arrives on the next line.
+        if (pending.fanoutSources && pending.fanoutSources.length > 0) {
+          for (const src of pending.fanoutSources) {
+            if (src === pending.from) continue;
+            const e = this.graph.addEdge(src, to, pending.leftOp, pending.rightOp, pending.label);
+            if (pending.attrs) e.setAttributes(pending.attrs);
+          }
+        }
+
         this.pendingEdge = undefined;
 
         this.lastChainNode = to;
@@ -876,6 +916,13 @@ class GraphEasyParser {
         part = part.slice(consumed).trim();
       }
 
+      // If this line started with an edge operator after a node list, and we ended up
+      // producing a pending edge (because the target node is on the next logical line),
+      // preserve the full source list so we can fan out when the edge is resolved.
+      if (listEdgeSources && listEdgeSources.length > 0 && this.pendingEdge) {
+        this.pendingEdge.fanoutSources = listEdgeSources;
+      }
+
       const edgesCreated = this.graph.edges.length - edgesBefore;
       const fanoutSources = commaSourceNodes.length > 0 ? commaSourceNodes : listEdgeSources;
       if (fanoutSources && fanoutSources.length > 0 && edgesCreated === 1 && this.lastCreatedEdge) {
@@ -905,6 +952,15 @@ class GraphEasyParser {
       listEdgeSources = undefined;
 
       commaEdgeList = this.lastCreatedEdge;
+    }
+
+    // Remember the last comma-separated edge target list (if any) so an edge-leading
+    // continuation on the next logical line ("--> ...") can fan out from the full set.
+    // This is required for inputs like:
+    //   [ Hannover ] --> [ Aachen ], [ Berlin ], [ Cuxhaven ]
+    //     --> [ Zwickau ]
+    if (commaTargetNodes.length > 0) {
+      this.lastNodeList = commaTargetNodes;
     }
   }
 

@@ -638,6 +638,9 @@ export class Node {
       if (flow === 90 || flow === 270) growWhat = ["cy", "cx"];
     }
 
+    // fake a non-sink node for nodes with an offset/children
+    if (this.origin !== undefined || this.children.size > 0) outgoing = 1;
+
     while (true) {
       // calculate whether we already found a space for all edges
       let freePorts = 0;
