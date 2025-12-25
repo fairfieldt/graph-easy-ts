@@ -111,6 +111,11 @@ class GdlParser {
     // Defaults observed in t/txt/gdl fixtures.
     this.graph.setDefaultAttributes("edge", { arrowstyle: "filled" });
     this.graph.setDefaultAttributes("node", { align: "left" });
+
+    // GDL/VCG labels can contain intentional spacing (e.g. assembly columns) and
+    // literal newlines inside quoted strings. Preserve internal label whitespace so
+    // ASCII output matches Graph::Easy.
+    this.graph.preserveLabelWhitespace = true;
   }
 
   public parse(): Graph {

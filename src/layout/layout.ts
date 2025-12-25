@@ -2430,7 +2430,14 @@ export function layoutGraph(graph: Graph): CellMap {
     const aRoot = chainRoot && a.start === chainRoot ? 1 : 0;
     const bRoot = chainRoot && b.start === chainRoot ? 1 : 0;
 
-    return bRoot - aRoot || b.len - a.len || cmpStr(a.start.id, b.start.id);
+    // Match Perl Layout.pm chain ordering:
+    // - root chain first
+    // - longest chains first
+    // - chains starting on nodes with an origin come later
+    const aHasOrigin = a.start.origin && a.start.origin !== a.start ? 1 : 0;
+    const bHasOrigin = b.start.origin && b.start.origin !== b.start ? 1 : 0;
+
+    return bRoot - aRoot || b.len - a.len || aHasOrigin - bHasOrigin || cmpStr(a.start.id, b.start.id);
   });
 
   for (const c of chainList) {
@@ -2438,15 +2445,15 @@ export function layoutGraph(graph: Graph): CellMap {
   }
 
   // Left-over nodes and their edges. Graph::Easy queues edges per-node.
-  // Match Perl ord_values($self->{nodes}) ordering (internal numeric id).
-  const nodes = [...graph.nodes()].sort((a, b) => cmpStr(String(a.numericId), String(b.numericId)));
+  // Match Perl ord_values($self->{nodes}) ordering (hash keyed by node name).
+  const nodes = [...graph.nodes()].sort((a, b) => cmpStr(a.id, b.id));
   for (const n of nodes) {
     todo.push(graph._layoutAction(ACTION_NODE, n, 0));
 
-    // Gather outgoing to-do edges sorted by destination name.
+    // Gather to-do edges (all incident edges) sorted by destination name.
     const edges = n
       .edges()
-      .filter((e) => e.todo && e.from === n)
+      .filter((e) => e.todo)
       .sort((a, b) => cmpStr(a.to.id, b.to.id));
 
     for (const e of edges) {

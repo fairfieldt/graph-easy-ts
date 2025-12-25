@@ -20,6 +20,7 @@ type Endpoint = {
 };
 
 type EdgeSpec = {
+  id: number;
   from: NodeRef;
   to: NodeRef;
   directed: boolean;
@@ -183,6 +184,9 @@ function tokenizeDot(text: string): Token[] {
 
 function htmlLikeToText(value: string): string {
   const trimmed = value.trim();
+  // Record labels frequently start/end with "<port>" tags (e.g. "<f0>|<f1> A|<f2>")
+  // and must *not* be treated as HTML-like labels.
+  if (trimmed.includes("|")) return value;
   if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
     return trimmed.slice(1, -1).trim();
   }
@@ -304,7 +308,6 @@ function parseRecord(labelRaw: string, flow: string): { displayLabel: string; po
   }
 
   let display = removeRecordPortTags(label);
-  display = display.trim();
   // Avoid empty parts in downstream renderers by ensuring at least two spaces for empty record fields.
   display = display.replace(/\|\s\|/g, "|  |");
 
@@ -329,6 +332,10 @@ class DotParser {
     this.graph.setGraphAttributes({ colorscheme: "x11", flow: "south" });
     this.graph.setDefaultAttributes("edge", { arrowstyle: "filled" });
     this.graph.setDefaultAttributes("group", { align: "center", fill: "inherit" });
+
+    // DOT label parsing (e.g. string continuations) can intentionally produce
+    // multiple internal spaces that must be preserved through ASCII rendering.
+    this.graph.preserveLabelWhitespace = true;
   }
 
   public parse(): Graph {
@@ -519,7 +526,11 @@ class DotParser {
           const attrs: Attributes = newAttrs();
           Object.assign(attrs, edgeAttrs);
 
-          this.edgeSpecs.push({ from, to, directed, label: finalLabel, attrs });
+          // Graph::Easy assigns node+edge IDs from one shared counter as it parses.
+          // Since we materialize edges later (after record splitting), reserve the
+          // edge ID here to preserve the interleaving and ord_values() ordering.
+          const id = this.graph.allocateId();
+          this.edgeSpecs.push({ id, from, to, directed, label: finalLabel, attrs });
         }
       }
     }
@@ -539,6 +550,11 @@ class DotParser {
     const refs: NodeRef[] = [];
     const scopedNodeDefaults: Attributes = newAttrs();
     let hasScopeStatements = false;
+
+    // Graphviz-style scoped defaults are not retroactive: nodes that already exist
+    // before entering this scope keep their attributes. (See dot/5_scope_atr.dot.)
+    const existingNodeIds = new Set<string>();
+    for (const n of this.graph.nodes()) existingNodeIds.add(n.id);
 
     while (!this.peekPunct("}") && !this.isEof()) {
       if (this.peekPunct(";") || this.peekPunct(",")) {
@@ -572,8 +588,13 @@ class DotParser {
       const ref = this.parseNodeRef();
       refs.push(ref);
 
-      const node = this.graph.addNode(ref.id);
-      node.setAttributes(scopedNodeDefaults);
+      // Only apply the scoped defaults to nodes that are first created in this scope.
+      if (!existingNodeIds.has(ref.id)) {
+        existingNodeIds.add(ref.id);
+        const node = this.graph.node(ref.id);
+        if (!node) throw new Error(`Internal error: missing node for id '${ref.id}'`);
+        node.setAttributes(scopedNodeDefaults);
+      }
     }
 
     this.expectPunct("}");
@@ -941,7 +962,6 @@ class DotParser {
         }
 
         remaining = remaining.slice(i + sepLen);
-        const remainingAfterSep = remaining;
 
         // Perl uses $1 || ' ' (empty parts become a single space).
         let part = partWasEmpty ? " " : partRaw;
@@ -954,21 +974,9 @@ class DotParser {
 
         // Determine whether to create a borderless empty node or a bordered empty node.
         let isEmptyBorderless = false;
-        if (partWasEmpty) {
-          isEmptyBorderless = true;
-        } else if (/^[ ]+$/.test(part)) {
-          if (partRaw.length === 1) {
-            const isRowStart = lastSep === "" || lastSep === "||";
-            const hasRightPart = remainingAfterSep !== "";
-            if (isRowStart || !hasRightPart) {
-              isEmptyBorderless = true;
-            } else {
-              part = " ";
-            }
-          } else {
-            // Explicit multi-space parts create an empty node *with* a border.
-            part = " ";
-          }
+        if (partWasEmpty || /^[ ]+$/.test(part)) {
+          // For Graphviz record nodes, empty fields are still *bordered* cells.
+          part = " ";
         } else {
           // strip spaces at front/end
           part = part.trim();
@@ -1044,8 +1052,15 @@ class DotParser {
       const rightOp = directed ? "-->" : "--";
       const leftOp = directed ? (spec.label ? "--" : "-->") : "--";
 
-      const edge = this.graph.addEdge(from, to, leftOp, rightOp, spec.label);
+      const edge = this.graph.addEdgeWithId(spec.id, from, to, leftOp, rightOp, spec.label);
       if (Object.keys(attrs).length) edge.setAttributes(attrs);
+
+      // Graph::Easy::Parser::Graphviz applies the scope edge defaults again after
+      // local edge attributes, meaning defaults like `edge [style=setlinewidth(3)]`
+      // override per-edge `style=` values (see dot/9_edge_styles.dot).
+      if (Object.keys(this.graph.defaultEdgeAttributes).length) {
+        edge.setAttributes(this.graph.defaultEdgeAttributes);
+      }
     }
   }
 

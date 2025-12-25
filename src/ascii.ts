@@ -259,42 +259,79 @@ function alignedLabel(label: string, align: string, wrap: string): AlignedLabel 
   if (effectiveWrap !== "none") {
     return wrappedLabel(label, effectiveAlign, effectiveWrap);
   }
-
-  const lines: string[] = [];
-  const aligns: AlignChar[] = [];
+  // No wrapping:
+  // - preserve explicit line breaks (literal \n from formats like GDL/VCG)
+  // - also honor Graph::Easy in-band markers (\\n/\\l/\\r/\\c)
+  // - preserve per-line alignment semantics from Graph::Easy
+  // - optionally collapse whitespace (Graph::Easy default) unless the graph requests
+  //   preserving internal label whitespace
 
   const al0 = effectiveAlign.slice(0, 1).toLowerCase();
   const defaultAlign: AlignChar = al0 === "l" ? "l" : al0 === "r" ? "r" : "c";
 
-  let lastAlign: AlignChar = defaultAlign;
+  // Perl returns zero lines for an explicitly empty label.
+  if (label === "") {
+    return { lines: [], aligns: [] };
+  }
 
-  // Split on escaped line breaks (\n/\r/\l/\c). The escape also affects the
-  // alignment of the *next* line.
-  let rest = label;
-  while (rest !== "") {
-    const m = /^(.*?)(?:\\([nrlc])|$)/s.exec(rest);
-    if (!m) break;
+  const lines: string[] = [];
+  const aligns: AlignChar[] = [];
 
-    let part = m[1];
-    const esc = m[2] ?? "n";
+  let currentAlign: AlignChar = defaultAlign;
+  let buf = "";
 
-    // Consume the matched prefix + escape (if present).
-    rest = rest.slice(part.length + (m[2] ? 2 : 0));
+  const flush = (): void => {
+    let part = buf;
+    buf = "";
 
+    // Unescape specials.
     part = part.replace(/\\\|/g, "|");
     part = part.replace(/\\\\/g, "\\");
+
+    // Trim and normalize whitespace unless the graph wants exact spacing.
     part = part.replace(/^\s+/, "");
     part = part.replace(/\s+$/, "");
-    if (!currentPreserveLabelWhitespace) part = part.replace(/\s+/g, " ");
-
-    // \n means "use default alignment" for the next line.
-    const nextAlignRaw = esc === "n" ? defaultAlign : (esc as AlignChar);
+    if (!currentPreserveLabelWhitespace) {
+      // Important: do NOT collapse newlines here; we split lines explicitly.
+      part = part.replace(/\s+/g, " ");
+    }
 
     lines.push(part);
-    aligns.push(lastAlign);
+    aligns.push(currentAlign);
+  };
 
-    lastAlign = nextAlignRaw;
+  // Normalize CRLF to LF so literal newlines behave consistently.
+  const s = label.replace(/\r\n?/g, "\n");
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+
+    // Literal newline in the label.
+    if (ch === "\n") {
+      flush();
+      currentAlign = defaultAlign;
+      continue;
+    }
+
+    // Graph::Easy alignment/newline escapes.
+    if (ch === "\\" && i + 1 < s.length) {
+      const next = s[i + 1];
+      if (next === "n" || next === "l" || next === "r" || next === "c") {
+        flush();
+        currentAlign = next === "n" ? defaultAlign : (next as AlignChar);
+        i += 1;
+        continue;
+      }
+    }
+
+    buf += ch;
   }
+
+  // Flush last segment.
+  flush();
+
+  // Perl generates one extra entry in some label routines; harmless, keep it.
+  aligns.push(currentAlign);
 
   return { lines, aligns };
 }

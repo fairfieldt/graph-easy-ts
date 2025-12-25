@@ -53,6 +53,10 @@ export class Graph {
 
   public seed = 0;
 
+  // Graph::Easy collapses internal whitespace in labels, but the DOT fixtures expect
+  // Graphviz string continuation whitespace (e.g. double spaces) to be preserved.
+  public preserveLabelWhitespace = false;
+
   public readonly graphAttributes: Attributes = Object.create(null);
   public readonly defaultNodeAttributes: Attributes = Object.create(null);
   public readonly defaultEdgeAttributes: Attributes = Object.create(null);
@@ -64,9 +68,11 @@ export class Graph {
 
   private readonly nodesById = new Map<string, Node>();
 
-  private nextNodeId = 1;
-
-  private nextEdgeId = 1;
+  // Graph::Easy uses a single shared counter for both node IDs and edge IDs.
+  // The resulting ID strings are later compared lexicographically via ord_values(),
+  // so matching the exact interleaving (nodes/edges created in parse order) matters
+  // for deterministic placement.
+  private nextId = 0;
 
   public readonly edges: Edge[] = [];
   public readonly groups: Group[] = [];
@@ -80,6 +86,10 @@ export class Graph {
 
   public nodes(): Iterable<Node> {
     return this.nodesById.values();
+  }
+
+  public allocateId(): number {
+    return this.nextId++;
   }
 
   public getNodeCount(): number {
@@ -134,7 +144,7 @@ export class Graph {
     const existing = this.nodesById.get(id);
     if (existing) return existing;
 
-    const node = new Node(id, label, this.nextNodeId++);
+    const node = new Node(id, label, this.allocateId());
     node.graph = this;
     node.setAttributes(this.defaultNodeAttributes);
     this.nodesById.set(id, node);
@@ -142,6 +152,10 @@ export class Graph {
   }
 
   public addEdge(from: Node, to: Node, leftOp: string, rightOp: string, label: string): Edge {
+    return this.addEdgeWithId(this.allocateId(), from, to, leftOp, rightOp, label);
+  }
+
+  public addEdgeWithId(id: number, from: Node, to: Node, leftOp: string, rightOp: string, label: string): Edge {
     const hasLeftArrow = leftOp.includes("<") || rightOp.includes("<");
     const hasRightArrow = leftOp.includes(">") || rightOp.includes(">");
 
@@ -157,7 +171,7 @@ export class Graph {
       actualTo = from;
     }
 
-    const edge = new Edge(this.nextEdgeId++, actualFrom, actualTo, leftOp, rightOp, label);
+    const edge = new Edge(id, actualFrom, actualTo, leftOp, rightOp, label);
     edge.setAttributes(this.defaultEdgeAttributes);
 
     // Graph::Easy encodes the edge line style directly in the operator token.
@@ -223,7 +237,12 @@ export class Graph {
         out.push(e);
       }
     }
-    out.sort((a, b) => a.id - b.id);
+    // Graph::Easy uses ord_values() which sorts keys lexicographically.
+    out.sort((a, b) => {
+      const ak = String(a.id);
+      const bk = String(b.id);
+      return ak < bk ? -1 : ak > bk ? 1 : 0;
+    });
     return out;
   }
 
