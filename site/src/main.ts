@@ -3,9 +3,33 @@
 import { Parser } from "../../src/parser";
 import { instance as vizInstance, type Viz } from "@viz-js/viz";
 
-const EXAMPLE = String.raw`# Minimal example
-[ A ] --> [ B ]
-[ B ] --> { label: ships } [ C ]
+const EXAMPLE = String.raw`# graph-easy-ts (TypeScript port) — rough module map
+
+# Entry points
+[ site/src/main.ts ] --> { label: imports } [ src/parser.ts ]
+[ src/index.ts ] --> { label: exports } [ src/parser.ts ]
+[ src/index.ts ] --> { label: exports } [ src/graph.ts ]
+
+# Core pipeline
+[ src/parser.ts ] --> { label: fromText() } [ src/graph.ts ]
+[ src/graph.ts ] --> { label: layout() } [ src/layout/layout.ts ]
+
+# Layout engine (simplified)
+[ src/layout/layout.ts ] --> [ src/layout/scout.ts ]
+[ src/layout/layout.ts ] --> [ src/layout/repair.ts ]
+[ src/layout/layout.ts ] --> [ src/layout/chain.ts ]
+[ src/layout/layout.ts ] --> [ src/layout/heap.ts ]
+
+# Graph model
+[ src/graph.ts ] --> { label: owns } [ src/node.ts ]
+[ src/graph.ts ] --> { label: owns } [ src/edge.ts ]
+[ src/graph.ts ] --> { label: owns } [ src/group.ts ]
+
+# Renderers
+[ src/graph.ts ] --> { label: asAscii() } [ src/ascii.ts ]
+[ src/graph.ts ] --> { label: asBoxart() } [ src/ascii.ts ]
+[ src/graph.ts ] --> { label: asTxt() } [ src/txt.ts ]
+[ src/graph.ts ] --> { label: asGraphviz() } [ src/graphviz.ts ]
 `;
 
 type StatusKind = "idle" | "ok" | "err" | "busy";
