@@ -217,8 +217,8 @@ html, body {
 .output {
   margin: 0;
   padding: 14px;
-  min-height: 320px;
-  max-height: 640px;
+  min-height: 440px;
+  max-height: 900px;
   overflow: auto;
   font-family: var(--mono);
   font-size: var(--output-font-size);
