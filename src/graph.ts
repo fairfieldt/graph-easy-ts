@@ -9,6 +9,7 @@ import type { NodeCell } from "./layout/nodeCell";
 
 import { renderAscii } from "./ascii";
 import { renderTxt } from "./txt.js";
+import { renderGraphviz } from "./graphviz.js";
 
 import { layoutGraph } from "./layout/layout";
 
@@ -152,6 +153,17 @@ export class Graph {
     return node;
   }
 
+  public addNodeWithId(id: string, label: string, numericId: number): Node {
+    const existing = this.nodesById.get(id);
+    if (existing) return existing;
+
+    const node = new Node(id, label, numericId);
+    node.graph = this;
+    node.applyInheritedAttributes(this.defaultNodeAttributes);
+    this.nodesById.set(id, node);
+    return node;
+  }
+
   public addEdge(from: Node, to: Node, leftOp: string, rightOp: string, label: string): Edge {
     return this.addEdgeWithId(this.allocateId(), from, to, leftOp, rightOp, label);
   }
@@ -279,5 +291,9 @@ export class Graph {
 
   public asTxt(): string {
     return renderTxt(this);
+  }
+
+  public asGraphviz(): string {
+    return renderGraphviz(this);
   }
 }

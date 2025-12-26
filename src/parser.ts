@@ -309,9 +309,6 @@ class GraphEasyParser {
   private readonly clusters = new Set<string>();
   private nextClusterId = 0;
 
-  // Track generated anonymous node ids (Perl Graph::Easy::Node::Anon).
-  private nextAnonId = 0;
-
   private clearLastCreatedEdge(): void {
     this.lastCreatedEdge = undefined;
   }
@@ -624,6 +621,11 @@ class GraphEasyParser {
         const meta: Attributes = Object.create(null);
         meta.autosplit_basename = baseName;
         meta.autosplit_xy = `${x},${y}`;
+        // Perl's As_graphviz.pm stores an internal autosplit_portname for use by
+        // _html_like_label when rendering relative-placement clusters. For
+        // Graph::Easy record/autosplit nodes, this is intentionally the empty
+        // string so Graphviz uses PORT="".
+        meta.autosplit_portname = "";
         if (idx === 0 && /^[ ]*$/.test(partRaw) && partRaw.length <= 1) {
           meta.autosplit_first_empty = "1";
         }
@@ -680,7 +682,7 @@ class GraphEasyParser {
   }
 
   private openGroup(name: string): Group {
-    const g = new Group(name);
+    const g = new Group(name, this.graph.allocateId());
     g.applyInheritedAttributes(this.graph.defaultGroupAttributes);
 
     const parent = this.currentGroup();
@@ -1159,12 +1161,9 @@ class GraphEasyParser {
     let node: Node;
     if (label === "") {
       // Perl Graph::Easy::Node::Anon: an anonymous, invisible node.
-      let id: string;
-      do {
-        id = `#${this.nextAnonId++}`;
-      } while (this.graph.node(id));
-
-      node = this.graph.addNode(id);
+      const numericId = this.graph.allocateId();
+      const id = `#${numericId}`;
+      node = this.graph.addNodeWithId(id, " ", numericId);
       node.label = " ";
       node.setAttributes({ shape: "invisible" });
     } else {

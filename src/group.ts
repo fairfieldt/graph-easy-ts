@@ -15,7 +15,11 @@ export class Group {
   public graph: Graph | undefined;
   public parent: Group | undefined;
 
-  public constructor(public readonly name: string) {}
+  public constructor(
+    public readonly name: string,
+    // Used for Graphviz cluster output (matches Perl Graph::Easy group->{id}).
+    public readonly id: number
+  ) {}
 
   public applyInheritedAttributes(attrs: Attributes): void {
     mergeAttributes(this.attributes, attrs);

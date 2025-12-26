@@ -37,6 +37,12 @@ function newAttrs(): Attributes {
   return Object.create(null) as Attributes;
 }
 
+function copyAttrs(attrs: Attributes): Attributes {
+  const out = newAttrs();
+  Object.assign(out, attrs);
+  return out;
+}
+
 function normalizeDotText(text: string): string {
   // Normalize line endings and handle DOT line continuations ("\\\n    ").
   const lf = text.replace(/\r\n?/g, "\n");
@@ -440,6 +446,17 @@ class DotParser {
   // Perl does not serialize these as additional `edge { ... }` defaults.
   private readonly dotEdgeDefaults: Attributes = newAttrs();
 
+  // Some DOT fixtures include compass-only node declarations like `c:w;`.
+  // Perl's Graph::Easy::Parser::Graphviz defers materializing these nodes in a
+  // way that affects the node-id ordering used by as_graphviz sorted_nodes().
+  // To match Perl, we defer materializing such nodes *only when* they have no
+  // attributes and are not part of an edge statement.
+  private readonly pendingCompassOnlyNodeDecls: Array<{
+    id: string;
+    group: Group | undefined;
+    nodeDefaultsSnapshot: Attributes;
+  }> = [];
+
   public constructor(text: string) {
     const normalized = normalizeDotText(text);
     this.tokens = tokenizeDot(normalized);
@@ -486,6 +503,17 @@ class DotParser {
 
     this.expectPunct("}");
 
+    for (const decl of this.pendingCompassOnlyNodeDecls) {
+      const existing = this.graph.node(decl.id);
+      const node = this.graph.addNode(decl.id);
+      if (decl.group) {
+        decl.group.addNode(node);
+      }
+      if (!existing && Object.keys(decl.nodeDefaultsSnapshot).length) {
+        node.setAttributes(decl.nodeDefaultsSnapshot);
+      }
+    }
+
     const recordInfo = this.splitRecordNodes();
     this.materializeEdges(recordInfo);
 
@@ -508,7 +536,7 @@ class DotParser {
       this.graph.setDefaultAttributes("group", { align: "center", fill: "inherit" });
     }
 
-    const g = new Group(name);
+    const g = new Group(name, this.graph.allocateId());
     g.applyInheritedAttributes(this.graph.defaultGroupAttributes);
 
     const parent = this.currentGroup();
@@ -574,16 +602,59 @@ class DotParser {
     }
     this.pos = pos0;
 
-    const ref = this.parseNodeRef();
+    const ref = this.parseNodeRefNoCreate();
 
     if (this.peekEdgeOp()) {
+      // Materialize the node now (to preserve Graph::Easy node-id allocation order).
+      this.materializeNodeId(ref.id);
       this.parseEdgeStatement({ refs: [ref], contributesToEdges: true });
       return;
     }
 
     // node statement
     const attrs = this.peekPunct("[") ? this.parseAttrList() : newAttrs();
+    const isCompassOnly =
+      ref.port !== undefined &&
+      ref.compass === undefined &&
+      /^(n|ne|e|se|s|sw|w|nw)$/.test(ref.port.trim().toLowerCase());
+
+    if (isCompassOnly && Object.keys(attrs).length === 0) {
+      this.pendingCompassOnlyNodeDecls.push({
+        id: ref.id,
+        group: this.currentGroup(),
+        nodeDefaultsSnapshot: copyAttrs(this.dotNodeDefaults),
+      });
+      return;
+    }
+
     this.applyNodeStatement(ref.id, attrs);
+  }
+
+  private materializeNodeId(id: string): void {
+    const existing = this.graph.node(id);
+    const node = this.graph.addNode(id);
+    this.addNodeToCurrentGroup(node);
+    if (!existing && Object.keys(this.dotNodeDefaults).length) {
+      node.setAttributes(this.dotNodeDefaults);
+    }
+  }
+
+  private parseNodeRefNoCreate(): NodeRef {
+    const id = this.parseIdExpr().trim();
+    let port: string | undefined;
+    let compass: string | undefined;
+
+    if (this.peekPunct(":")) {
+      this.pos++;
+      port = this.parseIdExpr().trim();
+
+      if (this.peekPunct(":")) {
+        this.pos++;
+        compass = this.parseIdExpr().trim();
+      }
+    }
+
+    return { id, port, compass };
   }
 
   private parseSubgraph(): void {
@@ -1064,6 +1135,10 @@ class DotParser {
 
       const { displayLabel, ports } = parseRecord(rawLabel, flow);
 
+      // If the DOT record used any explicit <port> tags, Perl treats unnamed fields
+      // differently than plain records: unnamed/empty fields use a single-space port.
+      const hasExplicitPorts = ports.some((p) => p !== undefined && p.trim() !== "");
+
       const base = n.id;
 
       // Determine whether a basename attribute should survive (mirrors perl cleanup).
@@ -1138,7 +1213,8 @@ class DotParser {
 
         // Determine whether to create a borderless empty node or a bordered empty node.
         let isEmptyBorderless = false;
-        if (partWasEmpty || /^[ ]+$/.test(part)) {
+        const isEmptyField = partWasEmpty || /^[ ]+$/.test(partRaw);
+        if (isEmptyField || /^[ ]+$/.test(part)) {
           // For Graphviz record nodes, empty fields are still *bordered* cells.
           part = " ";
         } else {
@@ -1152,10 +1228,26 @@ class DotParser {
         if (isEmptyBorderless) node.setAttributes({ shape: "invisible" });
 
         node.label = part;
+
+        // DOT record port naming:
+        // - If the record field has an explicit <port> tag, use it.
+        // - If any explicit ports exist in this record, unnamed fields use a single-space port.
+        // - Otherwise (no explicit ports), Perl uses the cell text as the port name for non-empty
+        //   fields and a two-space port name for truly empty fields ("||").
+        const portText = partRaw.trimEnd();
+        const derivedPortname =
+          ports[idx] ??
+          (hasExplicitPorts
+            ? isEmptyField
+              ? " "
+              : portText
+            : isEmptyField
+              ? "  "
+              : portText);
         node.setAttributes({
           autosplit_basename: base,
           autosplit_xy: `${x},${y}`,
-          autosplit_portname: ports[idx] ?? String(idx),
+          autosplit_portname: derivedPortname,
         });
 
         // Relative placement.
