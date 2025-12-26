@@ -7,7 +7,7 @@ import type { EdgeCellEmpty } from "./layout/edgeCellEmpty";
 import type { GroupCell } from "./layout/groupCell";
 import type { NodeCell } from "./layout/nodeCell";
 
-import { renderAscii } from "./ascii";
+import { renderAscii, renderBoxart } from "./ascii";
 import { renderTxt } from "./txt.js";
 import { renderGraphviz } from "./graphviz.js";
 
@@ -60,6 +60,11 @@ export class Graph {
   // Graph::Easy collapses internal whitespace in labels, but the DOT fixtures expect
   // Graphviz string continuation whitespace (e.g. double spaces) to be preserved.
   public preserveLabelWhitespace = false;
+
+  // Internal: matches Perl Graph::Easy->{_ascii_style}. The ASCII/boxart renderer sets
+  // this transiently so Node/Edge->labelText() can apply the correct autolabel
+  // shortening rules (ASCII uses " ... "; boxart uses " … ").
+  public _asciiStyleIndex: 0 | 1 = 0;
 
   public readonly graphAttributes: Attributes = Object.create(null);
   public readonly defaultNodeAttributes: Attributes = Object.create(null);
@@ -297,6 +302,10 @@ export class Graph {
 
   public asAscii(): string {
     return renderAscii(this);
+  }
+
+  public asBoxart(): string {
+    return renderBoxart(this);
   }
 
   public asTxt(): string {

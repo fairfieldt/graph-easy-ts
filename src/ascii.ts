@@ -57,6 +57,10 @@ interface AlignedLabel {
 }
 
 let currentPreserveLabelWhitespace = false;
+type AsciiStyleIndex = 0 | 1;
+
+// 0 = plain ASCII; 1 = Unicode box drawing (Graph::Easy as_boxart()).
+let currentAsciiStyleIndex: AsciiStyleIndex = 0;
 
 function graphTitleForDotEscapes(graph: Graph | undefined): string {
   return (graph?.graphAttributes.title ?? "").trim();
@@ -535,26 +539,52 @@ function correctSizeNode(node: Node, cells: CellMap): void {
   node.h = h;
 }
 
-const POINT_SHAPES_ASCII: Record<string, Record<string, string>> = {
-  filled: {
-    star: "*",
-    square: "#",
-    dot: ".",
-    circle: "o",
-    cross: "+",
-    diamond: "<>",
-    x: "X",
+type PointShapeTable = Record<string, Record<string, string>>;
+
+const POINT_SHAPES_BY_STYLE: [PointShapeTable, PointShapeTable] = [
+  // ASCII
+  {
+    filled: {
+      star: "*",
+      square: "#",
+      dot: ".",
+      circle: "o",
+      cross: "+",
+      diamond: "<>",
+      x: "X",
+    },
+    closed: {
+      star: "*",
+      square: "#",
+      dot: ".",
+      circle: "o",
+      cross: "+",
+      diamond: "<>",
+      x: "X",
+    },
   },
-  closed: {
-    star: "*",
-    square: "#",
-    dot: ".",
-    circle: "o",
-    cross: "+",
-    diamond: "<>",
-    x: "X",
+  // Boxart (Unicode)
+  {
+    filled: {
+      star: "★",
+      square: "■",
+      dot: "·",
+      circle: "●",
+      cross: "+",
+      diamond: "◆",
+      x: "╳",
+    },
+    closed: {
+      star: "☆",
+      square: "□",
+      dot: "·",
+      circle: "○",
+      cross: "+",
+      diamond: "◇",
+      x: "╳",
+    },
   },
-};
+];
 
 function pointStyle(node: Node): string {
   let shape = node.attribute("pointshape").trim().toLowerCase();
@@ -570,7 +600,7 @@ function pointStyle(node: Node): string {
 
   if (style === "") style = "filled";
 
-  return POINT_SHAPES_ASCII[style]?.[shape] ?? "";
+  return POINT_SHAPES_BY_STYLE[currentAsciiStyleIndex][style]?.[shape] ?? "";
 }
 
 function correctSizeGroupCell(cell: GroupCell): void {
@@ -920,21 +950,40 @@ function printfbAligned(
 
 type EdgeStyle = [string, string, string, string, string, string, string];
 
-const EDGE_STYLES_ASCII: Record<string, EdgeStyle> = {
-  solid: ["--", "|", "+", "+", "+", "+", "+"],
-  double: ["==", "H", "#", "#", "#", "#", "#"],
-  "double-dash": ["= ", '"', "#", "#", "#", "#", "#"],
-  dotted: ["..", ":", ":", ".", ".", ".", "."],
-  dashed: ["- ", "'", "+", "+", "+", "+", "+"],
-  "dot-dash": [".-", "!", "+", "+", "+", "+", "+"],
-  "dot-dot-dash": ["..-", "!", "+", "+", "+", "+", "+"],
-  wave: ["~~", "}", "+", "*", "*", "*", "*"],
-  bold: ["##", "#", "#", "#", "#", "#", "#"],
-  "bold-dash": ["# ", "#", "#", "#", "#", "#", "#"],
-  wide: ["##", "#", "#", "#", "#", "#", "#"],
-  broad: ["##", "#", "#", "#", "#", "#", "#"],
-  invisible: ["  ", " ", " ", " ", " ", " ", " "],
-};
+const EDGE_STYLES_BY_STYLE: [Record<string, EdgeStyle>, Record<string, EdgeStyle>] = [
+  // ASCII
+  {
+    solid: ["--", "|", "+", "+", "+", "+", "+"],
+    double: ["==", "H", "#", "#", "#", "#", "#"],
+    "double-dash": ["= ", '"', "#", "#", "#", "#", "#"],
+    dotted: ["..", ":", ":", ".", ".", ".", "."],
+    dashed: ["- ", "'", "+", "+", "+", "+", "+"],
+    "dot-dash": [".-", "!", "+", "+", "+", "+", "+"],
+    "dot-dot-dash": ["..-", "!", "+", "+", "+", "+", "+"],
+    wave: ["~~", "}", "+", "*", "*", "*", "*"],
+    bold: ["##", "#", "#", "#", "#", "#", "#"],
+    "bold-dash": ["# ", "#", "#", "#", "#", "#", "#"],
+    wide: ["##", "#", "#", "#", "#", "#", "#"],
+    broad: ["##", "#", "#", "#", "#", "#", "#"],
+    invisible: ["  ", " ", " ", " ", " ", " ", " "],
+  },
+  // Boxart (Unicode)
+  {
+    solid: ["─", "│", "┼", "┌", "┐", "└", "┘"],
+    double: ["═", "║", "╬", "╔", "╗", "╚", "╝"],
+    "double-dash": ["═ ", "∥", "╬", "╔", "╗", "╚", "╝"],
+    dotted: ["·", ":", "┼", "┌", "┐", "└", "┘"],
+    dashed: ["╴", "╵", "┘", "┌", "┐", "╵", "┘"],
+    "dot-dash": ["·-", "!", "┼", "┌", "┐", "└", "┘"],
+    "dot-dot-dash": [("·".repeat(2) + "-"), "!", "┼", "┌", "┐", "└", "┘"],
+    wave: ["∼", "≀", "┼", "┌", "┐", "└", "┘"],
+    bold: ["━", "┃", "╋", "┏", "┓", "┗", "┛"],
+    "bold-dash": ["━ ", "╻", "╋", "┏", "┓", "┗", "┛"],
+    broad: ["▬", "▮", "█", "█", "█", "█", "█"],
+    wide: ["█", "█", "█", "█", "█", "█", "█"],
+    invisible: ["  ", " ", " ", " ", " ", " ", " "],
+  },
+];
 
 // Ported from Graph::Easy::As_ascii.pm $crossings (ASCII variant) for EDGE_CROSS.
 const EDGE_CROSSINGS_ASCII: Record<string, string> = {
@@ -951,6 +1000,55 @@ const EDGE_CROSSINGS_ASCII: Record<string, string> = {
   soliddouble: "H",
   wavesolid: "+",
 };
+
+// Ported from Graph::Easy::As_ascii.pm $cross_styles (boxart variant).
+const EDGE_CROSS_STYLES_BOXART: Partial<Record<number, Record<string, string>>> = {
+  [EDGE_CROSS]: {
+    boldsolid: "┿",
+    solidbold: "╂",
+    doublesolid: "╪",
+    soliddouble: "╫",
+    dashedsolid: "┤",
+    soliddashed: "┴",
+    doubledashed: "╧",
+    dasheddouble: "╢",
+  },
+  [EDGE_S_E_W]: {
+    solidsolid: "┬",
+    boldbold: "┳",
+    doubledouble: "╦",
+    dasheddashed: "╴",
+    dotteddotted: "·",
+  },
+  [EDGE_N_E_W]: {
+    solidsolid: "┴",
+    boldbold: "┻",
+    doubledouble: "╩",
+    dotteddotted: "·",
+  },
+  [EDGE_E_N_S]: {
+    solidsolid: "├",
+    boldbold: "┣",
+    doubledouble: "╠",
+    dotteddotted: ":",
+  },
+  [EDGE_W_N_S]: {
+    solidsolid: "┤",
+    boldbold: "┫",
+    doubledouble: "╣",
+    dotteddotted: ":",
+  },
+};
+
+function edgeCrossChar(baseType: number, crossKey: string, fallback: string): string {
+  if (currentAsciiStyleIndex === 0) {
+    return baseType === EDGE_CROSS ? (EDGE_CROSSINGS_ASCII[crossKey] ?? fallback) : fallback;
+  }
+
+  const map = EDGE_CROSS_STYLES_BOXART[baseType];
+  if (!map) return fallback;
+  return map[crossKey] ?? fallback;
+}
 
 const ARROW_SHAPES: Record<string, number> = {
   triangle: 0,
@@ -1014,13 +1112,66 @@ const ARROW_STYLES_ASCII: Array<Record<string, [string, string, string, string]>
   },
 ];
 
+const ARROW_STYLES_BOXART: Array<Record<string, [string, string, string, string]>> = [
+  // triangle
+  {
+    open: [">", "<", "∧", "∨"],
+    closed: ["▷", "◁", "△", "▽"],
+    filled: ["▶", "◀", "▲", "▼"],
+  },
+  // diamond
+  {
+    open: [">", "<", "∧", "∨"],
+    closed: ["◇", "◇", "◇", "◇"],
+    filled: ["◆", "◆", "◆", "◆"],
+  },
+  // box
+  {
+    open: ["⊐", "⊐", "⊓", "⊔"],
+    closed: ["◻", "◻", "◻", "◻"],
+    filled: ["◼", "◼", "◼", "◼"],
+  },
+  // dot
+  {
+    open: [")", "(", "◠", "◡"],
+    closed: ["○", "○", "○", "○"],
+    filled: ["●", "●", "●", "●"],
+  },
+  // inv
+  {
+    open: ["<", ">", "∨", "∧"],
+    closed: ["◁", "▷", "▽", "△"],
+    filled: ["◀", "▶", "▼", "▲"],
+  },
+  // line
+  {
+    open: ["⎥", "⎢", "_", "¯"],
+    closed: ["⎥", "⎢", "_", "¯"],
+    filled: ["⎥", "⎢", "_", "¯"],
+  },
+  // cross
+  {
+    open: ["┼", "┼", "┼", "┼"],
+    closed: ["┼", "┼", "┼", "┼"],
+    filled: ["┼", "┼", "┼", "┼"],
+  },
+  // x
+  {
+    open: ["x", "x", "x", "x"],
+    closed: ["x", "x", "x", "x"],
+    filled: ["⧓", "⧓", "x", "x"],
+  },
+];
+
 function edgeStyle(style: string): EdgeStyle {
-  return EDGE_STYLES_ASCII[style] ?? EDGE_STYLES_ASCII.solid;
+  const styles = EDGE_STYLES_BY_STYLE[currentAsciiStyleIndex];
+  return styles[style] ?? styles.solid;
 }
 
 function arrowChar(style: string, dir: number, shape: string): string {
   const shapeIdx = ARROW_SHAPES[shape] ?? 0;
-  const byStyle = ARROW_STYLES_ASCII[shapeIdx][style];
+  const table = currentAsciiStyleIndex === 0 ? ARROW_STYLES_ASCII : ARROW_STYLES_BOXART;
+  const byStyle = table[shapeIdx][style];
   if (!byStyle) {
     // Unknown style; Graph::Easy treats this as an error; we keep it loud.
     throw new Error(`Unknown arrow style '${style}'`);
@@ -1163,8 +1314,7 @@ function drawCross(cell: EdgeCell, fb: Fb, absX: number, absY: number, rx: numbe
   const styleV = edgeStyle(verStyleName);
 
   const crossKey = `${horStyleName}${verStyleName}`;
-  const crossChar =
-    baseType === EDGE_CROSS ? (EDGE_CROSSINGS_ASCII[crossKey] ?? styleH[2]) : styleH[2];
+  const crossChar = edgeCrossChar(baseType, crossKey, styleH[2]);
 
   const asH = arrowStyleName(horEdge);
   const ashapeH = asH !== "none" ? arrowShapeName(horEdge) : "";
@@ -1576,7 +1726,7 @@ type NodeBorderStyle = {
   verRight: string[];
 };
 
-// Ported from Graph::Easy::As_ascii.pm $border_styles (ASCII variant only).
+// Ported from Graph::Easy::As_ascii.pm $border_styles.
 const NODE_BORDER_STYLES_ASCII: Record<string, NodeBorderStyle> = {
   solid: { ul: "+", ur: "+", lr: "+", ll: "+", horTop: "-", horBottom: "-", verLeft: ["|"], verRight: ["|"] },
   dotted: { ul: ".", ur: ".", lr: ":", ll: ":", horTop: ".", horBottom: ".", verLeft: [":"], verRight: [":"] },
@@ -1620,8 +1770,46 @@ const NODE_BORDER_STYLES_ASCII: Record<string, NodeBorderStyle> = {
   none: { ul: " ", ur: " ", lr: " ", ll: " ", horTop: " ", horBottom: " ", verLeft: [" "], verRight: [" "] },
 };
 
+const NODE_BORDER_STYLES_BOXART: Record<string, NodeBorderStyle> = {
+  solid: { ul: "┌", ur: "┐", lr: "┘", ll: "└", horTop: "─", horBottom: "─", verLeft: ["│"], verRight: ["│"] },
+  double: { ul: "╔", ur: "╗", lr: "╝", ll: "╚", horTop: "═", horBottom: "═", verLeft: ["║"], verRight: ["║"] },
+  dotted: { ul: "┌", ur: "┐", lr: "┘", ll: "└", horTop: "⋯", horBottom: "⋯", verLeft: ["⋮"], verRight: ["⋮"] },
+  dashed: { ul: "┌", ur: "┐", lr: "┘", ll: "└", horTop: "−", horBottom: "−", verLeft: ["╎"], verRight: ["╎"] },
+  "dot-dash": { ul: "┌", ur: "┐", lr: "┘", ll: "└", horTop: "·-", horBottom: "·-", verLeft: ["!"], verRight: ["!"] },
+  "dot-dot-dash": {
+    ul: "┌",
+    ur: "┐",
+    lr: "┘",
+    ll: "└",
+    horTop: "··-",
+    horBottom: "··-",
+    verLeft: ["│", ":"],
+    verRight: ["│", ":"],
+  },
+  bold: { ul: "┏", ur: "┓", lr: "┛", ll: "┗", horTop: "━", horBottom: "━", verLeft: ["┃"], verRight: ["┃"] },
+  "bold-dash": { ul: "┏", ur: "┓", lr: "┛", ll: "┗", horTop: "━ ", horBottom: "━ ", verLeft: ["╻"], verRight: ["╻"] },
+  "double-dash": { ul: "╔", ur: "╗", lr: "╝", ll: "╚", horTop: "═ ", horBottom: "═ ", verLeft: ["∥"], verRight: ["∥"] },
+  wave: { ul: "┌", ur: "┐", lr: "┘", ll: "└", horTop: "∼", horBottom: "∼", verLeft: ["≀"], verRight: ["≀"] },
+  broad: { ul: "▛", ur: "▜", lr: "▟", ll: "▙", horTop: "▀", horBottom: "▄", verLeft: ["▌"], verRight: ["▐"] },
+  wide: { ul: "█", ur: "█", lr: "█", ll: "█", horTop: "█", horBottom: "█", verLeft: ["█"], verRight: ["█"] },
+  none: { ul: " ", ur: " ", lr: " ", ll: " ", horTop: " ", horBottom: " ", verLeft: [" "], verRight: [" "] },
+};
+
+const ROUNDED_EDGES_BOXART = {
+  ul: "╭",
+  ur: "╮",
+  lr: "╯",
+  ll: "╰",
+} as const;
+
+function roundedNodeCornerChar(which: keyof typeof ROUNDED_EDGES_BOXART, borderStyle: string): string {
+  if (!/^(solid|dotted|dashed|dot-dash|dot-dot-dash)$/.test(borderStyle)) return " ";
+  return ROUNDED_EDGES_BOXART[which];
+}
+
 function nodeBorderStyle(style: string): NodeBorderStyle {
-  const s = NODE_BORDER_STYLES_ASCII[style];
+  const table = currentAsciiStyleIndex === 0 ? NODE_BORDER_STYLES_ASCII : NODE_BORDER_STYLES_BOXART;
+  const s = table[style];
   if (!s) {
     // Unknown style; Graph::Easy treats this as an error; keep it loud.
     throw new Error(`Unknown node border style '${style}'`);
@@ -1640,7 +1828,10 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
   if (shape === "edge") {
     // Graph::Easy::As_ascii.pm: shape=edge nodes are rendered as a dummy
     // EDGE_HOR + EDGE_LABEL_CELL edge cell.
-    const style = edgeStyle("solid");
+    // NOTE: Perl implements this by creating a fresh Graph::Easy::Edge::Cell
+    // (with no graph attached), which means it uses the ASCII edge styles even
+    // when the parent graph is rendered in boxart mode.
+    const style = EDGE_STYLES_BY_STYLE[0].solid;
     const len = style[0].length;
     const repeatCount = Math.floor(2 + w / len);
     let line = style[0].repeat(Math.max(0, repeatCount));
@@ -1730,8 +1921,13 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
       let tl = tlStyle !== "none" ? nodeBorderStyle(tlStyle).ul : undefined;
       let tr = trStyle !== "none" ? nodeBorderStyle(trStyle).ur : undefined;
       if (rounded) {
-        if (tl !== undefined) tl = " ";
-        if (tr !== undefined) tr = " ";
+        if (currentAsciiStyleIndex === 0) {
+          if (tl !== undefined) tl = " ";
+          if (tr !== undefined) tr = " ";
+        } else {
+          if (tl !== undefined) tl = roundedNodeCornerChar("ul", tlStyle);
+          if (tr !== undefined) tr = roundedNodeCornerChar("ur", trStyle);
+        }
       }
       horLine(0, st.horTop, tl, tr);
     }
@@ -1743,8 +1939,13 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
       let bl = blStyle !== "none" ? nodeBorderStyle(blStyle).ll : undefined;
       let br = brStyle !== "none" ? nodeBorderStyle(brStyle).lr : undefined;
       if (rounded) {
-        if (bl !== undefined) bl = " ";
-        if (br !== undefined) br = " ";
+        if (currentAsciiStyleIndex === 0) {
+          if (bl !== undefined) bl = " ";
+          if (br !== undefined) br = " ";
+        } else {
+          if (bl !== undefined) bl = roundedNodeCornerChar("ll", blStyle);
+          if (br !== undefined) br = roundedNodeCornerChar("lr", brStyle);
+        }
       }
       if (leftNeighborBorderless && left) {
         // For borderless-left neighbors, Graph::Easy leaves the bottom-left corner blank.
@@ -1867,16 +2068,22 @@ function drawGroupCell(cell: GroupCell, fb: Fb, absX: number, absY: number): voi
     const left = all || cls.includes("gl");
     const right = all || cls.includes("gr");
 
-    const style = edgeStyle(border);
-    const segH = style[0];
-    const segV = style[1];
-    const corner = style[2];
+    const style = nodeBorderStyle(border);
+    const segTop = style.horTop;
+    const segBottom = style.horBottom;
 
-    const horLine = (y: number): void => {
-      const len = segH.length;
+    const cornerNW = style.ul;
+    const cornerNE = style.ur;
+    const cornerSW = style.ll;
+    const cornerSE = style.lr;
+
+    const horLine = (y: number, seg: string): void => {
+      const len = seg.length;
       const repeatCount = Math.floor(2 + w / len);
-      let line = segH.repeat(Math.max(0, repeatCount));
+      let line = seg.repeat(Math.max(0, repeatCount));
 
+      // Keep dash patterns continuous across multi-cell groups by phasing the
+      // repeated segment relative to the absolute framebuffer X coordinate.
       const ofs = absX % len;
       if (ofs !== 0) line = line.slice(ofs);
       if (line.length > w) line = line.slice(0, w);
@@ -1884,20 +2091,28 @@ function drawGroupCell(cell: GroupCell, fb: Fb, absX: number, absY: number): voi
       putText(fb, absX, absY + y, line);
     };
 
-    if (top) horLine(0);
-    if (bottom) horLine(h - 1);
+    if (top) horLine(0, segTop);
+    if (bottom) horLine(h - 1, segBottom);
 
     if (left) {
-      for (let y = 0; y < h; y++) putChar(fb, absX, absY + y, segV);
+      const segs = style.verLeft;
+      const ofs = absY % segs.length;
+      for (let y = 0; y < h; y++) {
+        putChar(fb, absX, absY + y, segs[(ofs + y) % segs.length] ?? " ");
+      }
     }
     if (right) {
-      for (let y = 0; y < h; y++) putChar(fb, absX + w - 1, absY + y, segV);
+      const segs = style.verRight;
+      const ofs = absY % segs.length;
+      for (let y = 0; y < h; y++) {
+        putChar(fb, absX + w - 1, absY + y, segs[(ofs + y) % segs.length] ?? " ");
+      }
     }
 
-    if (top && left) putChar(fb, absX, absY, corner);
-    if (top && right) putChar(fb, absX + w - 1, absY, corner);
-    if (bottom && left) putChar(fb, absX, absY + h - 1, corner);
-    if (bottom && right) putChar(fb, absX + w - 1, absY + h - 1, corner);
+    if (top && left) putChar(fb, absX, absY, cornerNW);
+    if (top && right) putChar(fb, absX + w - 1, absY, cornerNE);
+    if (bottom && left) putChar(fb, absX, absY + h - 1, cornerSW);
+    if (bottom && right) putChar(fb, absX + w - 1, absY + h - 1, cornerSE);
   }
 
   if (cell.hasLabel) {
@@ -1916,13 +2131,17 @@ function drawGroupCell(cell: GroupCell, fb: Fb, absX: number, absY: number): voi
   }
 }
 
-export function renderAscii(graph: Graph): string {
+function renderAsciiWithStyle(graph: Graph, styleIndex: AsciiStyleIndex): string {
   const prevPreserveLabelWhitespace = currentPreserveLabelWhitespace;
+  const prevAsciiStyleIndex = currentAsciiStyleIndex;
+  const prevGraphAsciiStyleIndex = graph._asciiStyleIndex;
   currentPreserveLabelWhitespace = graph.preserveLabelWhitespace;
+  currentAsciiStyleIndex = styleIndex;
+  graph._asciiStyleIndex = styleIndex;
   try {
-  if (!graph.cells) graph.layout();
-  const cells = graph.cells;
-  if (!cells) throw new Error("renderAscii(): graph.layout() did not produce cells");
+    if (!graph.cells) graph.layout();
+    const cells = graph.cells;
+    if (!cells) throw new Error("renderAscii(): graph.layout() did not produce cells");
 
   // If there are no renderable cells (e.g. empty graph), Graph::Easy prints just a newline.
   const hasRenderable = [...cells.values()].some((c) => c instanceof Node || c instanceof EdgeCell || c instanceof GroupCell);
@@ -2007,8 +2226,18 @@ export function renderAscii(graph: Graph): string {
   else if (labelAlign === "center") pad = Math.max(0, Math.trunc((width - graphLabel.length) / 2));
   const labelLine = " ".repeat(pad) + graphLabel;
 
-  return ["", labelLine, "", ...contentLines].join("\n") + "\n";
+    return ["", labelLine, "", ...contentLines].join("\n") + "\n";
   } finally {
     currentPreserveLabelWhitespace = prevPreserveLabelWhitespace;
+    currentAsciiStyleIndex = prevAsciiStyleIndex;
+    graph._asciiStyleIndex = prevGraphAsciiStyleIndex;
   }
+}
+
+export function renderAscii(graph: Graph): string {
+  return renderAsciiWithStyle(graph, 0);
+}
+
+export function renderBoxart(graph: Graph): string {
+  return renderAsciiWithStyle(graph, 1);
 }

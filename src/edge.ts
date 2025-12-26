@@ -234,12 +234,19 @@ export class Edge {
         if (len > 99999) len = 99999;
 
         if (out.length > len) {
-          let keep = Math.trunc(len / 2) - 3;
+          const asciiStyle = this.graph?._asciiStyleIndex ?? 0;
+          // NOTE: In Perl Graph::Easy 0.76, Node.pm contains the literal ' … '. In the
+          // upstream runtime/oracle output this appears as the mojibake sequence
+          // U+00E2 U+0080 U+00A6, so we mirror that exactly for boxart parity.
+          const ellipsis = asciiStyle === 0 ? " ... " : " \u00e2\u0080\u00a6 ";
+          const keepAdjust = asciiStyle === 0 ? 3 : 2;
+
+          let keep = Math.trunc(len / 2) - keepAdjust;
           if (keep < 0) keep = 0;
           if (keep === 0) {
-            out = " ... ";
+            out = ellipsis;
           } else {
-            out = out.slice(0, keep) + " ... " + out.slice(out.length - keep);
+            out = out.slice(0, keep) + ellipsis + out.slice(out.length - keep);
           }
         }
       }
