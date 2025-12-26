@@ -89,8 +89,9 @@ async function initWebPerl(perlStatus: HTMLElement, perlOutput: HTMLElement): Pr
     return;
   }
 
-  // Manifest lists Perl files relative to /Graph-Easy-0.76/lib
-  const manifestUrl = "/Graph-Easy-0.76/manifest.json";
+  // Manifest lists Perl files relative to Graph-Easy-0.76/lib.
+  // Use Vite's BASE_URL so this works on GitHub Pages (/REPO_NAME/).
+  const manifestUrl = `${import.meta.env.BASE_URL}Graph-Easy-0.76/manifest.json`;
   const manifestRes = await fetch(manifestUrl);
   if (!manifestRes.ok) {
     webPerlState = {
@@ -124,7 +125,7 @@ async function initWebPerl(perlStatus: HTMLElement, perlOutput: HTMLElement): Pr
   };
 
   for (const rel of files) {
-    const url = `/Graph-Easy-0.76/lib/${rel}`;
+    const url = `${import.meta.env.BASE_URL}Graph-Easy-0.76/lib/${rel}`;
     const res = await fetch(url);
     if (!res.ok) {
       webPerlState = { kind: "error", error: `Failed to fetch ${url}` };
