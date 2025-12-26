@@ -1,0 +1,2 @@
+[ Jena ] -- train --> { start: front, 0; } [ Augsburg ], [ Ulm ]
+[ Jena ] -- car --> { start: front, 0; } [ Plauen ]

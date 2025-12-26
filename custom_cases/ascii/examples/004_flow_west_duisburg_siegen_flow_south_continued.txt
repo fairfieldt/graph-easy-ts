@@ -1,0 +1,2 @@
+graph { flow: west; } [ Duisburg ] -> [ Siegen ] { flow: south; }
+-> [ Adenau ]

@@ -1,0 +1,22 @@
+graph { background: white; }    # for the graph itself
+node { background: white; }     # for all nodes
+edge { style: bold; } # for all edges
+node.city { background: red; }  # for all nodes with class "city"
+[ Bonn ] { class: city; }       # for the node "Bonn"
+[ Bonn ] --> { style: dotted; } # for the edge "Bonn" to "Berlin"
+[ Berlin ] { color: green; }    # for the node "Berlin"
+[ ABC ] { border: bold; color: white; }
+[ DEF ] # DEF has not yet attributes
+{
+fill: #ff8060; # applies only to DEF
+} ,
+[ GHI ]
+{ # these apply to DEF and GHI!
+border: bold;
+color: white;
+} ,
+[ JKL ]
+{
+shape: circle; # applies to DEF, GHI and JKL
+}
+[ ] { fill: brown; } # for the anonymous node only

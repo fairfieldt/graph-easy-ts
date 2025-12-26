@@ -1,0 +1,7 @@
+graph { align: left; label: My Graph; }
+node {align: left;}
+( Nodes:
+  [ Right\nAligned ] { align: right; }
+  -- label\n text --> { align: left; }
+  [ Left\naligned ]
+)

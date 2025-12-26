@@ -1,0 +1,2 @@
+perl examples/as_graphviz my_graph.txt | dot -Tpng -o graph.png
+perl examples/as_graphviz my_graph.txt | dot -Tsvg -o graph.svg

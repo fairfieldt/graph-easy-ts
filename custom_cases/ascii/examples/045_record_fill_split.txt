@@ -1,0 +1,1 @@
+[ Bonn | Berlin | Frankfurt ] { fill: red|yellow|blue; }

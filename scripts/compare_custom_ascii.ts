@@ -2,8 +2,14 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-type Case = {
+type CaseFileEntry = {
   inputRel: string;
+};
+
+type ParsedCase = {
+  name: string;
+  sourceRel: string;
+  content: string;
 };
 
 function parseArgs(argv: string[]): {
@@ -75,9 +81,9 @@ function parseArgs(argv: string[]): {
   return res;
 }
 
-function readIndexFile(indexPath: string): Case[] {
+function readIndexFile(indexPath: string): CaseFileEntry[] {
   const lines = fs.readFileSync(indexPath, "utf8").split(/\r?\n/);
-  const cases: Case[] = [];
+  const out: CaseFileEntry[] = [];
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -88,10 +94,50 @@ function readIndexFile(indexPath: string): Case[] {
       throw new Error(`Bad INDEX.txt line: ${raw}`);
     }
 
-    cases.push({ inputRel: m[1] });
+    out.push({ inputRel: m[1] });
   }
 
-  return cases;
+  return out;
+}
+
+function splitCasesFromFile(sourceRel: string, rawText: string): ParsedCase[] {
+  const lines = rawText.split(/\r?\n/);
+
+  const isCaseHeader = (line: string): string | undefined => {
+    const m = /^#\s*CASE:\s*(.+?)\s*$/.exec(line);
+    return m ? m[1] : undefined;
+  };
+
+  const headers = lines.map(isCaseHeader).filter((x): x is string => x !== undefined);
+  if (headers.length === 0) {
+    return [{ name: sourceRel, sourceRel, content: rawText.endsWith("\n") ? rawText : rawText + "\n" }];
+  }
+
+  const out: ParsedCase[] = [];
+
+  let curName: string | undefined;
+  let curLines: string[] = [];
+
+  const flush = (): void => {
+    if (!curName) return;
+    const content = curLines.join("\n").replace(/^\n+/, "").replace(/\n+$/, "") + "\n";
+    out.push({ name: curName, sourceRel, content });
+  };
+
+  for (const line of lines) {
+    const maybe = isCaseHeader(line);
+    if (maybe !== undefined) {
+      flush();
+      curName = maybe;
+      curLines = [];
+      continue;
+    }
+
+    curLines.push(line);
+  }
+
+  flush();
+  return out;
 }
 
 function firstDiffIndex(a: string, b: string): number {
@@ -132,52 +178,65 @@ function main(): void {
   const perlRoot = path.join(repoRoot, "Graph-Easy-0.76");
   const perlAsAscii = path.join(perlRoot, "examples", "as_ascii");
 
-  const cases = readIndexFile(indexPath);
+  const entries = readIndexFile(indexPath);
+
+  const cases: ParsedCase[] = [];
+  for (const e of entries) {
+    const inputPath = path.join(casesRoot, e.inputRel);
+    const raw = fs.readFileSync(inputPath, "utf8");
+    cases.push(...splitCasesFromFile(e.inputRel, raw));
+  }
 
   let pass = 0;
+  let passExpectedError = 0;
   let fail = 0;
 
   const limitCases = maxCases ?? cases.length;
 
   for (let i = 0; i < cases.length && i < limitCases; i++) {
     const c = cases[i];
+    const id = `${c.sourceRel}::${c.name}`;
 
-    if (only && !c.inputRel.includes(only)) continue;
-    if (exclude && c.inputRel.includes(exclude)) continue;
+    if (only && !id.includes(only)) continue;
+    if (exclude && id.includes(exclude)) continue;
 
-    const inputPath = path.join(casesRoot, c.inputRel);
-
-    const perl = childProcess.spawnSync("perl", [perlAsAscii, inputPath], {
+    const perl = childProcess.spawnSync("perl", [perlAsAscii], {
       cwd: perlRoot,
+      input: c.content,
       encoding: "utf8",
       maxBuffer: 20 * 1024 * 1024,
     });
 
+    const ts = childProcess.spawnSync(process.execPath, [asAsciiJs], {
+      input: c.content,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+
+    // Perl is the oracle.
     if (perl.status !== 0) {
+      if (ts.status === 0) {
+        fail++;
+        process.stderr.write(`[FAIL:expected-error] ${id} (perl failed, ts succeeded)\n`);
+        if (failFast || fail >= maxFailures) break;
+        continue;
+      }
+
+      passExpectedError++;
+      continue;
+    }
+
+    // Perl succeeded; TS must succeed and match output.
+    if (ts.status !== 0) {
       fail++;
-      const stderr = perl.stderr ?? "";
-      process.stderr.write(`[FAIL:perl-runtime] ${c.inputRel} (exit=${perl.status})\n`);
+      process.stderr.write(`[FAIL:ts-runtime] ${id} (perl ok, ts exit=${ts.status})\n`);
+      const stderr = ts.stderr ?? "";
       if (stderr) process.stderr.write(stderr.split(/\r?\n/).slice(0, 40).join("\n") + "\n");
       if (failFast || fail >= maxFailures) break;
       continue;
     }
 
     const expected = perl.stdout ?? "";
-
-    const ts = childProcess.spawnSync(process.execPath, [asAsciiJs, inputPath], {
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-    });
-
-    if (ts.status !== 0) {
-      fail++;
-      const stderr = ts.stderr ?? "";
-      process.stderr.write(`[FAIL:ts-runtime] ${c.inputRel} (exit=${ts.status})\n`);
-      if (stderr) process.stderr.write(stderr.split(/\r?\n/).slice(0, 40).join("\n") + "\n");
-      if (failFast || fail >= maxFailures) break;
-      continue;
-    }
-
     const actual = ts.stdout ?? "";
 
     if (actual === expected) {
@@ -188,12 +247,14 @@ function main(): void {
     fail++;
     const idx = firstDiffIndex(actual, expected);
     const pos = idx === -1 ? { line: 1, col: 1 } : lineColAt(expected, idx);
-    process.stderr.write(`[FAIL:diff] ${c.inputRel} (first mismatch at line ${pos.line}, col ${pos.col})\n`);
+    process.stderr.write(`[FAIL:diff] ${id} (first mismatch at line ${pos.line}, col ${pos.col})\n`);
 
     if (failFast || fail >= maxFailures) break;
   }
 
-  process.stdout.write(`pass=${pass} fail=${fail} (maxFailures=${maxFailures})\n`);
+  process.stdout.write(
+    `pass=${pass} pass_expected_error=${passExpectedError} fail=${fail} (maxFailures=${maxFailures})\n`
+  );
   process.exitCode = fail === 0 ? 0 : 1;
 }
 

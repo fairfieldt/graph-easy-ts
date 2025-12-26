@@ -1,0 +1,1 @@
+[ Bonn ] -- ICE --> { labelcolor: blue; } [ Berlin ]

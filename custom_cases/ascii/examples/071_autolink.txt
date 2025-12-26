@@ -1,0 +1,6 @@
+node { autolink: name; textstyle: none; fontsize: 1.1em; }
+graph { linkbase: http://de.wikipedia.org/wiki/; }
+edge { textstyle: overline; }
+[] --> [ Friedrichshafen ]
+-- Schiff --> { autolink: label; color: orange; title: Vrooom!; }
+[ Immenstaad ] { color: green; } --> [ Hagnau ]

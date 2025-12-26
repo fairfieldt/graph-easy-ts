@@ -1,0 +1,2 @@
+[ Bonn ] -- longer --> { minlen: 3; } [ Berlin ]
+[ Bonn ] --> [ Potsdam ] { origin: Bonn; offset: 2,2; }

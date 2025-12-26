@@ -1,0 +1,1 @@
+[ A ] --> { style: bold; } [ B ] --> { style: broad; } [ B ] --> { style: bold-dash; } [ C ] --> { style: invisible; } [ D ]

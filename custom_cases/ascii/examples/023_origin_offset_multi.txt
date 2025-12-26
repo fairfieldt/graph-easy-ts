@@ -1,0 +1,2 @@
+[ A ] { size: 3,2; } [ A ] -> [ B ] { origin: A; offset: 2,0; }
+[ A ] -> [ C ] { origin: A; offset: 1,1; }

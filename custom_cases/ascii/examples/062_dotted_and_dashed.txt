@@ -1,0 +1,2 @@
+node { border: dotted; }
+[ Dotted ] --> [ Dashed ] { borderstyle: dashed; } --> [ broad ] { borderstyle: broad; }

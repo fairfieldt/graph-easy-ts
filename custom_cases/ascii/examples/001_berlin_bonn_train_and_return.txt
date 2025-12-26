@@ -1,0 +1,2 @@
+[ Berlin ] -- train --> [ Bonn ]
+[ Bonn ] --> [ Berlin ]

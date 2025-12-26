@@ -1,0 +1,1 @@
+[ Left ] -> { start: left; end: left; } [ Right ]

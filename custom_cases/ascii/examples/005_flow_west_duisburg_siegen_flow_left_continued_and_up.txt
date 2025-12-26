@@ -1,0 +1,3 @@
+graph { flow: west; } [ Duisburg ] -> [ Siegen ] { flow: left; }
+-> [ Adenau ]
+[ Siegen ] -> { flow: up; } [ Monschau ]

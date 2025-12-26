@@ -1,0 +1,2 @@
+[ Crimson ] { shape: circle; background: crimson; } -- Aqua Marine --> { background: #7fffd4; }
+[ Misty Rose ] { background: white; fill: rgb(255,228,221); shape: ellipse; }
