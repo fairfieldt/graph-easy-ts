@@ -10,7 +10,7 @@
     "as_boxart": "npm run build --silent && node dist/examples/as_boxart.js",
     "as_txt": "npm run build --silent && node dist/examples/as_txt.js",
     "as_graphviz": "npm run build --silent && node dist/examples/as_graphviz.js",
-    "compare": "npm run build --silent && node dist/scripts/compare.js",
+    "compare_ascii": "npm run build --silent && node dist/scripts/compare_ascii.js",
     "compare_custom_ascii": "npm run build --silent && node dist/scripts/compare_custom_ascii.js",
     "compare_boxart": "npm run build --silent && node dist/scripts/compare_boxart.js",
     "compare_txt": "npm run build --silent && node dist/scripts/compare_txt.js",
