@@ -2433,7 +2433,20 @@ export function layoutGraph(graph: Graph): CellMap {
     const aHasOrigin = a.start.origin && a.start.origin !== a.start ? 1 : 0;
     const bHasOrigin = b.start.origin && b.start.origin !== b.start ? 1 : 0;
 
-    return bRoot - aRoot || b.len - a.len || aHasOrigin - bHasOrigin || cmpStr(a.start.id, b.start.id);
+    const aIsolated = a.len === 1 && a.start.edges().length === 0;
+    const bIsolated = b.len === 1 && b.start.edges().length === 0;
+
+    const main = bRoot - aRoot || b.len - a.len || aHasOrigin - bHasOrigin;
+    if (main) return main;
+
+    // Perl uses deterministic ordering for tie-breaking. Most chains are ordered by
+    // node name; however, completely isolated single-node chains behave like leftover
+    // nodes and follow creation order (numeric id).
+    if (aIsolated && bIsolated) {
+      return cmpStr(String(a.start.numericId), String(b.start.numericId));
+    }
+
+    return cmpStr(a.start.id, b.start.id);
   });
 
   for (const c of chainList) {
@@ -2441,8 +2454,8 @@ export function layoutGraph(graph: Graph): CellMap {
   }
 
   // Left-over nodes and their edges. Graph::Easy queues edges per-node.
-  // Match Perl ord_values($self->{nodes}) ordering (hash keyed by node name).
-  const nodes = [...graph.nodes()].sort((a, b) => cmpStr(a.id, b.id));
+  // Match Perl ord_values($self->{nodes}) ordering (internal numeric node id, not name).
+  const nodes = [...graph.nodes()].sort((a, b) => cmpStr(String(a.numericId), String(b.numericId)));
   for (const n of nodes) {
     todo.push(graph._layoutAction(ACTION_NODE, n, 0));
 

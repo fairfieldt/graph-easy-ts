@@ -112,7 +112,68 @@ export function parseAttributesBlock(blockText: string): Attributes {
   const attrs: Attributes = Object.create(null);
   if (!inner) return attrs;
 
-  for (const rawPart of inner.split(";")) {
+  const parts: string[] = [];
+  {
+    let cur = "";
+    let quote: '"' | "'" | undefined;
+    let escaped = false;
+
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+
+      if (escaped) {
+        cur += ch;
+        escaped = false;
+        continue;
+      }
+
+      if (ch === "\\") {
+        cur += ch;
+        escaped = true;
+        continue;
+      }
+
+      if (quote) {
+        if (ch === quote) {
+          quote = undefined;
+        }
+        cur += ch;
+        continue;
+      }
+
+      if (ch === '"' || ch === "'") {
+        // Only treat quote chars as string delimiters when they look like they
+        // start a quoted value (e.g. after ':' or '='). Otherwise, keep them
+        // literal so ';' splitting matches Perl behavior for values like 21".
+        let prevNonWs: string | undefined;
+        for (let j = cur.length - 1; j >= 0; j--) {
+          const pj = cur[j];
+          if (!/\s/.test(pj)) {
+            prevNonWs = pj;
+            break;
+          }
+        }
+
+        if (prevNonWs === undefined || prevNonWs === ":" || prevNonWs === "=") {
+          quote = ch as '"' | "'";
+        }
+        cur += ch;
+        continue;
+      }
+
+      if (ch === ";") {
+        parts.push(cur);
+        cur = "";
+        continue;
+      }
+
+      cur += ch;
+    }
+
+    parts.push(cur);
+  }
+
+  for (const rawPart of parts) {
     const part = rawPart.trim();
     if (!part) continue;
 
