@@ -280,9 +280,6 @@ function main(): void {
   const btnRun = document.getElementById("btn-run") as HTMLButtonElement;
   const btnReset = document.getElementById("btn-reset") as HTMLButtonElement;
   const outputFormat = document.getElementById("output-format") as HTMLSelectElement;
-  const outFontDec = document.getElementById("out-font-dec") as HTMLButtonElement;
-  const outFontInc = document.getElementById("out-font-inc") as HTMLButtonElement;
-  const outFontFit = document.getElementById("out-font-fit") as HTMLButtonElement;
 
   const tsSvg = document.getElementById("ts-svg") as HTMLElement;
   const tsOut = document.getElementById("ts-output") as HTMLElement;
@@ -303,79 +300,6 @@ function main(): void {
   const diffStatus = document.getElementById("diff-status") as HTMLElement;
 
   input.value = EXAMPLE;
-
-  const OUTPUT_FONT_STORAGE_KEY = "graph-easy-site:output-font-px";
-  const OUTPUT_FONT_MIN = 8;
-  const OUTPUT_FONT_MAX = 18;
-
-  const applyOutputFontPx = (px: number) => {
-    const clamped = Math.max(OUTPUT_FONT_MIN, Math.min(OUTPUT_FONT_MAX, px));
-    document.documentElement.style.setProperty("--output-font-size", `${clamped}px`);
-    try {
-      localStorage.setItem(OUTPUT_FONT_STORAGE_KEY, String(clamped));
-    } catch {
-      // ignore
-    }
-  };
-
-  const loadOutputFontPx = (): number => {
-    try {
-      const raw = localStorage.getItem(OUTPUT_FONT_STORAGE_KEY);
-      if (!raw) return 12.5;
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : 12.5;
-    } catch {
-      return 12.5;
-    }
-  };
-
-  let outputFontPx = loadOutputFontPx();
-  applyOutputFontPx(outputFontPx);
-
-  const maxLineLen = (text: string): number => {
-    const lines = text.replace(/\r\n?/g, "\n").split("\n");
-    let max = 0;
-    for (const line of lines) {
-      if (line.length > max) max = line.length;
-    }
-    return max;
-  };
-
-  const fitOutputFontToVisiblePanes = (): void => {
-    const visiblePres = Array.from(document.querySelectorAll("pre.output")).filter(
-      (el) => !el.classList.contains("is-hidden")
-    ) as HTMLElement[];
-    const first = visiblePres[0];
-    if (!first) return;
-
-    const widthPx = first.clientWidth;
-    if (widthPx <= 0) return;
-
-    const allText = [tsOut.textContent ?? "", perlOut.textContent ?? "", diffOut.textContent ?? ""];
-    const longest = allText.reduce((m, t) => Math.max(m, maxLineLen(t)), 0);
-    if (longest <= 0) return;
-
-    const probe = document.createElement("span");
-    probe.textContent = "MMMMMMMMMM";
-    probe.style.position = "absolute";
-    probe.style.visibility = "hidden";
-    probe.style.whiteSpace = "pre";
-    probe.style.fontFamily = getComputedStyle(first).fontFamily;
-    probe.style.fontSize = "10px";
-    document.body.appendChild(probe);
-    const charWidthAt10 = probe.getBoundingClientRect().width / 10;
-    probe.remove();
-
-    if (!(charWidthAt10 > 0)) return;
-
-    const available = widthPx - 2;
-    const pxPerCharAt1 = charWidthAt10 / 10;
-    const targetPx = Math.floor(available / (longest * pxPerCharAt1));
-    if (!Number.isFinite(targetPx) || targetPx <= 0) return;
-
-    outputFontPx = targetPx;
-    applyOutputFontPx(outputFontPx);
-  };
 
   let tsView: GraphvizView = "rendered";
   let perlView: GraphvizView = "rendered";
@@ -415,16 +339,6 @@ function main(): void {
   tsTabText.addEventListener("click", () => setGraphvizView("ts", "text"));
   perlTabRendered.addEventListener("click", () => setGraphvizView("perl", "rendered"));
   perlTabText.addEventListener("click", () => setGraphvizView("perl", "text"));
-
-  outFontDec.addEventListener("click", () => {
-    outputFontPx -= 1;
-    applyOutputFontPx(outputFontPx);
-  });
-  outFontInc.addEventListener("click", () => {
-    outputFontPx += 1;
-    applyOutputFontPx(outputFontPx);
-  });
-  outFontFit.addEventListener("click", () => fitOutputFontToVisiblePanes());
 
   const run = async () => {
     const mySeq = ++runSeq;
