@@ -6,6 +6,7 @@ import type { GroupCell } from "./layout/groupCell";
 
 export class Group {
   public readonly attributes: Attributes = Object.create(null);
+  public readonly explicitAttributes: Attributes = Object.create(null);
   public readonly nodes = new Set<Node>();
   public readonly groups: Group[] = [];
 
@@ -16,8 +17,13 @@ export class Group {
 
   public constructor(public readonly name: string) {}
 
+  public applyInheritedAttributes(attrs: Attributes): void {
+    mergeAttributes(this.attributes, attrs);
+  }
+
   public setAttributes(attrs: Attributes): void {
     mergeAttributes(this.attributes, attrs);
+    mergeAttributes(this.explicitAttributes, attrs);
   }
 
   public rawAttribute(key: string): string | undefined {

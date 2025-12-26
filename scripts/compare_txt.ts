@@ -4,7 +4,6 @@ import * as path from "node:path";
 
 type Case = {
   inputRel: string;
-  expectedRel: string;
 };
 
 function parseArgs(argv: string[]): {
@@ -84,16 +83,13 @@ function readIndexFile(indexPath: string): Case[] {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
 
-    // Format (see file header):
-    // - <input rel to t/in> -> <expected rel to Graph-Easy-0.76>
     const m = /^-\s+(\S+)\s+->\s+(\S+)\s*$/.exec(line);
     if (!m) {
       throw new Error(`Bad INDEX.txt line: ${raw}`);
     }
 
     const inputRelToInputsRoot = m[1];
-    const expectedRel = m[2];
-    cases.push({ inputRel: path.posix.join("t/in", inputRelToInputsRoot), expectedRel });
+    cases.push({ inputRel: path.posix.join("t/in", inputRelToInputsRoot) });
   }
 
   return cases;
@@ -124,12 +120,33 @@ function lineColAt(text: string, idx: number): { line: number; col: number } {
   return { line, col };
 }
 
+function runPerlAsTxt(repoRoot: string, inputPath: string): childProcess.SpawnSyncReturns<string> {
+  const lib = path.join(repoRoot, "Graph-Easy-0.76", "lib");
+
+  const perlCode = `use strict; use warnings; use utf8; use Graph::Easy;\n` +
+    `binmode STDOUT, ':encoding(UTF-8)';\n` +
+    // Read as UTF-8 text (not raw bytes) so that non-ASCII fixture content (e.g. Umlauts)
+    // round-trips through Perl without mojibake.
+    `my $file = shift; open my $fh, '<:encoding(UTF-8)', $file or die $!; local $/; my $txt = <$fh>; close $fh;\n` +
+    `my $g = Graph::Easy->new($txt); die $g->error if $g->error;\n` +
+    `print $g->as_txt();`;
+
+  return childProcess.spawnSync(
+    "perl",
+    ["-I", lib, "-MGraph::Easy", "-e", perlCode, inputPath],
+    {
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    }
+  );
+}
+
 function main(): void {
   const { maxCases, maxFailures, failFast, only, exclude } = parseArgs(process.argv.slice(2));
 
   const repoRoot = process.cwd();
   const indexPath = path.join(repoRoot, "GE.bak", "examples_output", "INDEX.txt");
-  const asAsciiJs = path.join(repoRoot, "dist", "examples", "as_ascii.js");
+  const asTxtJs = path.join(repoRoot, "dist", "examples", "as_txt.js");
 
   const cases = readIndexFile(indexPath);
 
@@ -145,11 +162,23 @@ function main(): void {
     if (exclude && c.inputRel.includes(exclude)) continue;
 
     const inputPath = path.join(repoRoot, "Graph-Easy-0.76", c.inputRel);
-    const expectedPath = path.join(repoRoot, "GE.bak", c.expectedRel);
 
-    const expected = fs.readFileSync(expectedPath, "utf8");
+    const perl = runPerlAsTxt(repoRoot, inputPath);
+    if (perl.status !== 0) {
+      fail++;
+      const stderr = perl.stderr ?? "";
+      process.stderr.write(
+        `[FAIL:perl] ${c.inputRel} (exit=${perl.status})\n` +
+          (stderr ? stderr.split(/\r?\n/).slice(0, 20).join("\n") + "\n" : "")
+      );
 
-    const run = childProcess.spawnSync(process.execPath, [asAsciiJs, inputPath], {
+      if (failFast || fail >= maxFailures) break;
+      continue;
+    }
+
+    const expected = perl.stdout ?? "";
+
+    const run = childProcess.spawnSync(process.execPath, [asTxtJs, inputPath], {
       encoding: "utf8",
       maxBuffer: 20 * 1024 * 1024,
     });
@@ -160,7 +189,7 @@ function main(): void {
       fail++;
       const stderr = run.stderr ?? "";
       process.stderr.write(
-        `[FAIL:runtime] ${c.inputRel} -> ${c.expectedRel} (exit=${run.status})\n` +
+        `[FAIL:runtime] ${c.inputRel} (exit=${run.status})\n` +
           (stderr ? stderr.split(/\r?\n/).slice(0, 20).join("\n") + "\n" : "")
       );
 
@@ -176,9 +205,7 @@ function main(): void {
     fail++;
     const idx = firstDiffIndex(stdout, expected);
     const pos = idx === -1 ? { line: 1, col: 1 } : lineColAt(expected, idx);
-    process.stderr.write(
-      `[FAIL:diff] ${c.inputRel} -> ${c.expectedRel} (first mismatch at line ${pos.line}, col ${pos.col})\n`
-    );
+    process.stderr.write(`[FAIL:diff] ${c.inputRel} (first mismatch at line ${pos.line}, col ${pos.col})\n`);
 
     if (failFast || fail >= maxFailures) break;
   }

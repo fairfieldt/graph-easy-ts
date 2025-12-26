@@ -566,7 +566,7 @@ class GraphEasyParser {
           }
         } else {
           // Explicit multi-space parts create an empty node *with* a border.
-          part = " ";
+          part = "  ";
         }
       } else {
         // strip spaces at front/end
@@ -608,14 +608,27 @@ class GraphEasyParser {
 
       // For borderless empty cells, mirror Graph::Easy::Node::Empty.
       if (isEmptyBorderless) {
-        node.setAttributes({ shape: "invisible" });
+        node.applyInheritedAttributes({ shape: "invisible" });
       }
 
       // Store display label (Graph::Easy uses autosplit_label).
       node.label = part;
 
+      // The first node in the autosplit cluster carries the full record label.
+      if (idx === 0) {
+        node.autosplitLabel = name;
+      }
+
       // Record autosplit metadata (useful for debugging / future parity).
-      node.setAttributes({ autosplit_basename: baseName, autosplit_xy: `${x},${y}` });
+      {
+        const meta: Attributes = Object.create(null);
+        meta.autosplit_basename = baseName;
+        meta.autosplit_xy = `${x},${y}`;
+        if (idx === 0 && /^[ ]*$/.test(partRaw) && partRaw.length <= 1) {
+          meta.autosplit_first_empty = "1";
+        }
+        node.applyInheritedAttributes(meta);
+      }
 
       // Relative placement.
       if (idx === 0) {
@@ -668,7 +681,7 @@ class GraphEasyParser {
 
   private openGroup(name: string): Group {
     const g = new Group(name);
-    g.setAttributes(this.graph.defaultGroupAttributes);
+    g.applyInheritedAttributes(this.graph.defaultGroupAttributes);
 
     const parent = this.currentGroup();
     if (parent) parent.addGroup(g);
@@ -1076,7 +1089,10 @@ class GraphEasyParser {
     for (const sel of selectors) {
       // .class
       if (sel.startsWith(".")) {
-        this.graph.setClassAttributes("node", sel.slice(1), attrs);
+        const className = sel.slice(1);
+        this.graph.setClassAttributes("node", className, attrs);
+        this.graph.setClassAttributes("edge", className, attrs);
+        this.graph.setClassAttributes("group", className, attrs);
         continue;
       }
 
@@ -1508,7 +1524,10 @@ export class Parser {
   }
 
   public static fromText(text: string): Graph {
+    // Strip hash comments that start with `# ` or `#\t` (including inline comments).
+    // Important: do NOT treat hex color values like `#ff00ff` as comments.
+    const withoutHashComments = text.replace(/(^|[ \t])#[ \t].*$/gm, "$1");
     const parser = new GraphEasyParser();
-    return parser.parse(text);
+    return parser.parse(withoutHashComments);
   }
 }

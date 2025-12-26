@@ -111,6 +111,7 @@ class GdlParser {
     // Defaults observed in t/txt/gdl fixtures.
     this.graph.setDefaultAttributes("edge", { arrowstyle: "filled" });
     this.graph.setDefaultAttributes("node", { align: "left" });
+    this.graph.setGraphAttributes({ flow: "south" });
 
     // GDL/VCG labels can contain intentional spacing (e.g. assembly columns) and
     // literal newlines inside quoted strings. Preserve internal label whitespace so
@@ -171,7 +172,9 @@ class GdlParser {
       }
 
       if (key === "label") {
-        attrs.label = stripColorCodes(value);
+        // Perl serializes multi-line VCG/GDL labels using literal "\\n" sequences
+        // in as_txt output, not raw newline characters.
+        attrs.label = stripColorCodes(value).replace(/\n/g, "\\n");
         continue;
       }
 

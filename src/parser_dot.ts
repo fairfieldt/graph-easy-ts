@@ -188,9 +188,115 @@ function htmlLikeToText(value: string): string {
   // and must *not* be treated as HTML-like labels.
   if (trimmed.includes("|")) return value;
   if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
-    return trimmed.slice(1, -1).trim();
+    // Perl Graph::Easy preserves whitespace *inside* the HTML-like label (e.g. `< ] >`
+    // becomes ` ] `, not `]`).
+    const inner = trimmed.slice(1, -1);
+    // dot/4_html_like.dot: empty HTML-like labels `<>` are treated as a single-space
+    // label (not an empty string).
+    return inner === "" ? " " : inner;
   }
   return value;
+}
+
+function normalizeDotHexColor(raw: string): string {
+  if (!raw.startsWith("#")) return raw;
+  return "#" + raw.slice(1).replace(/\s+/g, "").toLowerCase();
+}
+
+function hsv01ToRgbHex(hRaw: string, sRaw: string, vRaw: string): string {
+  const h0 = Number(hRaw);
+  const s0 = Number(sRaw);
+  const v0 = Number(vRaw);
+
+  const h = ((h0 % 1) + 1) % 1;
+  const s = Math.max(0, Math.min(1, s0));
+  const v = Math.max(0, Math.min(1, v0));
+
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  switch (i % 6) {
+    case 0:
+      r = v;
+      g = t;
+      b = p;
+      break;
+    case 1:
+      r = q;
+      g = v;
+      b = p;
+      break;
+    case 2:
+      r = p;
+      g = v;
+      b = t;
+      break;
+    case 3:
+      r = p;
+      g = q;
+      b = v;
+      break;
+    case 4:
+      r = t;
+      g = p;
+      b = v;
+      break;
+    case 5:
+      r = v;
+      g = p;
+      b = q;
+      break;
+  }
+
+  const toHex = (x: number): string => {
+    const clamped = Math.max(0, Math.min(255, Math.round(x * 255)));
+    return clamped.toString(16).padStart(2, "0");
+  };
+
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function normalizeDotColor(value: string): string {
+  const v0 = value.trim();
+
+  // "//" means empty colorscheme (Graphviz syntax).
+  const v1 = v0.startsWith("//") ? v0.slice(2) : v0;
+
+  // Colorscheme prefix: /scheme/value
+  const schemeMatch = /^\/([^/]+)\/(.+)$/.exec(v1);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    const rest = schemeMatch[2];
+
+    if (scheme === "x11") {
+      return rest;
+    }
+
+    if (scheme === "accent4") {
+      const idx = Number(rest);
+      const colors = ["#7fc97f", "#beaed4", "#fdc086", "#ffff99"];
+      if (Number.isFinite(idx) && idx >= 1 && idx <= colors.length) return colors[idx - 1];
+    }
+  }
+
+  // HSV forms.
+  const hsvComma = /^([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)$/.exec(v1);
+  if (hsvComma) {
+    return `hsv(${hsvComma[1]},${hsvComma[2]},${hsvComma[3]})`;
+  }
+
+  const hsvSpace = /^([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)$/.exec(v1);
+  if (hsvSpace) {
+    return hsv01ToRgbHex(hsvSpace[1], hsvSpace[2], hsvSpace[3]);
+  }
+
+  return normalizeDotHexColor(v1);
 }
 
 function compassToDir(compass: string): string {
@@ -309,6 +415,8 @@ function parseRecord(labelRaw: string, flow: string): { displayLabel: string; po
 
   let display = removeRecordPortTags(label);
   // Avoid empty parts in downstream renderers by ensuring at least two spaces for empty record fields.
+  // Note: `| | |` contains overlapping `| |` matches, so apply twice to catch consecutive empty fields.
+  display = display.replace(/\|\s\|/g, "|  |");
   display = display.replace(/\|\s\|/g, "|  |");
 
   return { displayLabel: display, ports };
@@ -324,6 +432,14 @@ class DotParser {
   private readonly edgeSpecs: EdgeSpec[] = [];
   private defaultEdgeLabel = "";
 
+  // DOT `node [ ... ]` defaults should be applied to nodes as they are created.
+  // Perl does not serialize these as a `node { ... }` defaults block in as_txt.
+  private readonly dotNodeDefaults: Attributes = newAttrs();
+
+  // DOT `edge [ ... ]` defaults should be applied to edges as they are created.
+  // Perl does not serialize these as additional `edge { ... }` defaults.
+  private readonly dotEdgeDefaults: Attributes = newAttrs();
+
   public constructor(text: string) {
     const normalized = normalizeDotText(text);
     this.tokens = tokenizeDot(normalized);
@@ -331,7 +447,6 @@ class DotParser {
     // DOT default setup (mirrors expected t/txt/dot outputs).
     this.graph.setGraphAttributes({ colorscheme: "x11", flow: "south" });
     this.graph.setDefaultAttributes("edge", { arrowstyle: "filled" });
-    this.graph.setDefaultAttributes("group", { align: "center", fill: "inherit" });
 
     // DOT label parsing (e.g. string continuations) can intentionally produce
     // multiple internal spaces that must be preserved through ASCII rendering.
@@ -350,10 +465,14 @@ class DotParser {
       throw new Error(`Expected 'graph' or 'digraph', got: ${graphTypeToken}`);
     }
 
-    const title = this.peekPunct("{") ? "" : this.parseIdExpr().trim();
-    if (title) {
-      this.graph.setGraphAttributes({ title });
+    // Perl Graph::Easy emits an explicit `type: undirected;` marker for DOT `graph`
+    // inputs (see dot/2_no_spaces.dot).
+    if (graphType === "graph") {
+      this.graph.setGraphAttributes({ type: "undirected" });
     }
+
+    const title = this.peekPunct("{") ? "" : this.parseIdExpr().trim();
+    this.graph.setGraphAttributes({ title: title || "unnamed" });
 
     this.expectPunct("{");
 
@@ -370,11 +489,6 @@ class DotParser {
     const recordInfo = this.splitRecordNodes();
     this.materializeEdges(recordInfo);
 
-    // Graphviz label escapes like "\\G" and "\\N" are expanded during rendering
-    // in Graph::Easy; do the same here so ASCII output matches the canonical DOT
-    // fixtures.
-    this.expandGraphvizLabels();
-
     return this.graph;
   }
 
@@ -388,8 +502,14 @@ class DotParser {
   }
 
   private openGroup(name: string): Group {
+    // DOT parser defaults: only materialize the default group attrs if we actually
+    // see a subgraph (Perl emits a `group { ... }` block only when groups exist).
+    if (Object.keys(this.graph.defaultGroupAttributes).length === 0) {
+      this.graph.setDefaultAttributes("group", { align: "center", fill: "inherit" });
+    }
+
     const g = new Group(name);
-    g.setAttributes(this.graph.defaultGroupAttributes);
+    g.applyInheritedAttributes(this.graph.defaultGroupAttributes);
 
     const parent = this.currentGroup();
     if (parent) parent.addGroup(g);
@@ -652,8 +772,12 @@ class DotParser {
       }
     }
 
+    const existing = this.graph.node(id);
     const node = this.graph.addNode(id);
     this.addNodeToCurrentGroup(node);
+    if (!existing && Object.keys(this.dotNodeDefaults).length) {
+      node.setAttributes(this.dotNodeDefaults);
+    }
 
     return { id, port, compass };
   }
@@ -697,8 +821,7 @@ class DotParser {
   }
 
   private applyNodeDefaults(attrs: Attributes): void {
-    const mapped = this.remapNodeAttrs(attrs);
-    if (mapped) this.graph.setDefaultAttributes("node", mapped);
+    Object.assign(this.dotNodeDefaults, this.remapNodeAttrs(attrs));
   }
 
   private applyEdgeDefaults(attrs: Attributes): void {
@@ -709,12 +832,16 @@ class DotParser {
       this.defaultEdgeLabel = edgeLabel;
     }
 
-    if (Object.keys(edgeAttrs).length) this.graph.setDefaultAttributes("edge", edgeAttrs);
+    if (Object.keys(edgeAttrs).length) Object.assign(this.dotEdgeDefaults, edgeAttrs);
   }
 
   private applyNodeStatement(nodeId: string, attrs: Attributes): void {
+    const existing = this.graph.node(nodeId);
     const node = this.graph.addNode(nodeId);
     this.addNodeToCurrentGroup(node);
+    if (!existing && Object.keys(this.dotNodeDefaults).length) {
+      node.setAttributes(this.dotNodeDefaults);
+    }
 
     const mapped = this.remapNodeAttrs(attrs);
     if (mapped) node.setAttributes(mapped);
@@ -739,6 +866,7 @@ class DotParser {
     if (k === "labelloc") return { labelpos: mapLabellocToLabelpos(value) };
     if (k === "label") return { label: value };
     if (k === "colorscheme") return { colorscheme: value };
+    if (k === "output") return { output: value };
 
     // Preserve unknown graph attrs under x-dot-* (matches t/txt/dot fixtures).
     return { [`x-dot-${k}`]: value };
@@ -750,6 +878,29 @@ class DotParser {
     if (k === "label") return { label: value };
     if (k === "labeljust") return { align: mapLabeljustToAlign(value) };
     if (k === "labelloc") return { labelpos: mapLabellocToLabelpos(value) };
+
+    if (k === "pencolor") {
+      // dot/3_colors.dot: clusters with pencolor="#ff 00 00" serialize as a dashed border.
+      const c = normalizeDotColor(value);
+      return { border: `dashed  ${c}` };
+    }
+
+    if (k === "style") {
+      const parts = value
+        .split(",")
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean);
+
+      // Match Perl DOT behavior for clusters: dashed/dotted/bold map to a border style;
+      // filled is covered by the default group fill.
+      for (const p of parts) {
+        if (p === "dotted" || p === "dashed" || p === "bold") {
+          return { border: `${p}  black` };
+        }
+      }
+
+      return undefined;
+    }
 
     // Preserve unknown group attrs.
     return { [`x-dot-${k}`]: value };
@@ -816,12 +967,13 @@ class DotParser {
       }
 
       if (k === "color") {
-        out.color = v;
+        out.color = normalizeDotColor(v);
         continue;
       }
 
-      // Preserve unknown node attrs.
-      out[`x-dot-${k}`] = v;
+      // Perl warns and ignores unknown DOT node attributes.
+      // (See dot/2_ignore.dot.)
+      continue;
     }
 
     return out;
@@ -862,6 +1014,11 @@ class DotParser {
         continue;
       }
 
+      if (k === "color") {
+        out.color = normalizeDotColor(v);
+        continue;
+      }
+
       if (k === "style") {
         let style = v.trim();
         if (style === "invis") style = "invisible";
@@ -876,12 +1033,17 @@ class DotParser {
           else if (width >= 5 && width < 11) style = "broad";
         }
 
-        out.style = style;
+        // Avoid setting the default style explicitly.
+        if (style !== "solid") {
+          out.style = style;
+        }
         continue;
       }
 
       // Preserve unknown edge attrs.
-      out[`x-dot-${k}`] = v;
+      // Perl warns and ignores unknown DOT edge attributes.
+      // (See dot/2_ignore.dot.)
+      continue;
     }
 
     return { edgeLabel: label, edgeAttrs: out, dirMod };
@@ -905,7 +1067,9 @@ class DotParser {
       const base = n.id;
 
       // Determine whether a basename attribute should survive (mirrors perl cleanup).
+      // Only emit basename when it differs from the visible record label (dot/7_record.dot).
       const cleanedBasename = removeRecordPortTags(base).trim();
+      const displayBasename = displayLabel.trim();
 
       const portIndexByName = new Map<string, number>();
 
@@ -997,7 +1161,14 @@ class DotParser {
         // Relative placement.
         if (idx === 0) {
           firstInRow = node;
-          if (cleanedBasename !== "") {
+          // The first autosplit part is the visible record root. Store the full
+          // record label here so as_txt serializes the record node as
+          // `[ <record label> ]` instead of `[ <id> ]`.
+          node.autosplitLabel = displayLabel;
+          // Internal marker used by the txt renderer to match Perl spacing quirks for
+          // DOT-derived record labels.
+          node.setAttributes({ autosplit_from_dot: "1" });
+          if (cleanedBasename !== "" && cleanedBasename !== displayBasename) {
             node.setAttributes({ basename: cleanedBasename });
           }
         } else {
@@ -1058,8 +1229,13 @@ class DotParser {
       // Graph::Easy::Parser::Graphviz applies the scope edge defaults again after
       // local edge attributes, meaning defaults like `edge [style=setlinewidth(3)]`
       // override per-edge `style=` values (see dot/9_edge_styles.dot).
-      if (Object.keys(this.graph.defaultEdgeAttributes).length) {
-        edge.setAttributes(this.graph.defaultEdgeAttributes);
+      if (Object.keys(this.dotEdgeDefaults).length) {
+        // Apply defaults after locals, and record them explicitly so as_txt prints
+        // them per-edge (Perl behavior).
+        for (const [k, v] of Object.entries(this.dotEdgeDefaults)) {
+          edge.attributes[k] = v;
+          edge.explicitAttributes[k] = v;
+        }
       }
     }
   }

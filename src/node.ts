@@ -74,6 +74,11 @@ function flowAsDirection(inflow: FlowDirection, dir: string): FlowDirection {
 export class Node {
   public readonly attributes: Attributes = Object.create(null);
 
+  // Explicit attributes set directly on this node (attribute blocks, per-part
+  // autosplit attrs, etc.). This intentionally excludes inherited class defaults
+  // like `node { ... }`.
+  public readonly explicitAttributes: Attributes = Object.create(null);
+
   // Internal numeric node ID (Graph::Easy::Node->{id}). This is assigned by the
   // Graph at node creation time and is used for deterministic ordering in
   // predecessors()/successors() via ord_values().
@@ -161,7 +166,19 @@ export class Node {
     this.numericId = numericId;
   }
 
+  // For autosplit clusters, the first node in the cluster carries the original
+  // record label (including '|'/"||"); other parts leave this undefined.
+  public autosplitLabel: string | undefined;
+
+  public applyInheritedAttributes(attrs: Attributes): void {
+    this.applyAttributes(attrs, false);
+  }
+
   public setAttributes(attrs: Attributes): void {
+    this.applyAttributes(attrs, true);
+  }
+
+  private applyAttributes(attrs: Attributes, recordExplicit: boolean): void {
     // Apply class attributes (Graph::Easy "node.<class> { ... }") before merging
     // explicit node attributes so inline attrs win.
     if (Object.prototype.hasOwnProperty.call(attrs, "class")) {
@@ -177,6 +194,9 @@ export class Node {
     }
 
     mergeAttributes(this.attributes, attrs);
+    if (recordExplicit) {
+      mergeAttributes(this.explicitAttributes, attrs);
+    }
 
     // Ported from Graph::Easy::Node->set_attribute for relative placement.
     // Note: Graph::Easy also stores these as attributes so attribute('origin')/
@@ -221,7 +241,11 @@ export class Node {
         this.dy = y;
 
         // Normalize the stored attribute value.
-        this.attributes.offset = `${this.dx},${this.dy}`;
+        const normalized = `${this.dx},${this.dy}`;
+        this.attributes.offset = normalized;
+        if (recordExplicit) {
+          this.explicitAttributes.offset = normalized;
+        }
       }
     }
   }

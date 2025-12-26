@@ -121,6 +121,10 @@ function flowAsDirection(inflow: FlowDirection, dir: string): FlowDirection {
 export class Edge {
   public readonly attributes: Attributes = Object.create(null);
 
+  // Explicit attributes set directly on this edge. This excludes inherited class
+  // defaults like `edge { ... }`.
+  public readonly explicitAttributes: Attributes = Object.create(null);
+
   public graph: Graph | undefined;
   public group: Group | undefined;
 
@@ -141,7 +145,15 @@ export class Edge {
     public readonly label: string
   ) {}
 
+  public applyInheritedAttributes(attrs: Attributes): void {
+    this.applyAttributes(attrs, false);
+  }
+
   public setAttributes(attrs: Attributes): void {
+    this.applyAttributes(attrs, true);
+  }
+
+  private applyAttributes(attrs: Attributes, recordExplicit: boolean): void {
     // Apply class attributes (Graph::Easy "edge.<class> { ... }") before merging
     // explicit edge attributes so inline attrs win.
     if (Object.prototype.hasOwnProperty.call(attrs, "class")) {
@@ -157,6 +169,9 @@ export class Edge {
     }
 
     mergeAttributes(this.attributes, attrs);
+    if (recordExplicit) {
+      mergeAttributes(this.explicitAttributes, attrs);
+    }
   }
 
   public rawAttribute(key: string): string | undefined {

@@ -8,6 +8,7 @@ import type { GroupCell } from "./layout/groupCell";
 import type { NodeCell } from "./layout/nodeCell";
 
 import { renderAscii } from "./ascii";
+import { renderTxt } from "./txt.js";
 
 import { layoutGraph } from "./layout/layout";
 
@@ -146,7 +147,7 @@ export class Graph {
 
     const node = new Node(id, label, this.allocateId());
     node.graph = this;
-    node.setAttributes(this.defaultNodeAttributes);
+    node.applyInheritedAttributes(this.defaultNodeAttributes);
     this.nodesById.set(id, node);
     return node;
   }
@@ -172,7 +173,7 @@ export class Graph {
     }
 
     const edge = new Edge(id, actualFrom, actualTo, leftOp, rightOp, label);
-    edge.setAttributes(this.defaultEdgeAttributes);
+    edge.applyInheritedAttributes(this.defaultEdgeAttributes);
 
     // Graph::Easy encodes the edge line style directly in the operator token.
     // However, Graphviz-style defaults like `edge { style: invisible }` are used
@@ -181,9 +182,9 @@ export class Graph {
     const operatorStyle = inferEdgeStyleFromOperators(leftOp, rightOp);
     const currentStyle = edge.attribute("style").trim().toLowerCase();
     if (!currentStyle) {
-      edge.setAttributes({ style: operatorStyle });
+      edge.applyInheritedAttributes({ style: operatorStyle });
     } else if (currentStyle === "invisible" && operatorStyle !== "solid") {
-      edge.setAttributes({ style: operatorStyle });
+      edge.applyInheritedAttributes({ style: operatorStyle });
     }
 
     edge.graph = this;
@@ -274,5 +275,9 @@ export class Graph {
 
   public asAscii(): string {
     return renderAscii(this);
+  }
+
+  public asTxt(): string {
+    return renderTxt(this);
   }
 }
