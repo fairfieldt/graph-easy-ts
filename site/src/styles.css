@@ -208,12 +208,6 @@ html, body {
   gap: 16px;
 }
 
-@media (min-width: 1100px) {
-  .grid3 {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-}
-
 .output {
   margin: 0;
   padding: 14px;
