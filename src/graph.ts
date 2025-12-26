@@ -10,6 +10,8 @@ import type { NodeCell } from "./layout/nodeCell";
 import { renderAscii } from "./ascii";
 import { renderTxt } from "./txt.js";
 
+import { validateGroupAttributes } from "./validate";
+
 import { layoutGraph } from "./layout/layout";
 
 import type { LayoutAction } from "./layout/chain";
@@ -118,12 +120,20 @@ export class Graph {
   }
 
   public setDefaultAttributes(kind: "node" | "edge" | "group", attrs: Attributes): void {
+    if (kind === "group") {
+      validateGroupAttributes(attrs);
+    }
+
     if (kind === "node") mergeAttributes(this.defaultNodeAttributes, attrs);
     else if (kind === "edge") mergeAttributes(this.defaultEdgeAttributes, attrs);
     else mergeAttributes(this.defaultGroupAttributes, attrs);
   }
 
   public setClassAttributes(kind: "node" | "edge" | "group", className: string, attrs: Attributes): void {
+    if (kind === "group") {
+      validateGroupAttributes(attrs);
+    }
+
     const map =
       kind === "node" ? this.nodeClassAttributes : kind === "edge" ? this.edgeClassAttributes : this.groupClassAttributes;
 
