@@ -2,25 +2,16 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-type Case = {
-  inputRel: string;
-  expectedRel: string;
-};
-
-function parseArgs(argv: string[]): {
+type ParsedArgs = {
   maxCases?: number;
   maxFailures: number;
   failFast: boolean;
   only?: string;
   exclude?: string;
-} {
-  const res: {
-    maxCases?: number;
-    maxFailures: number;
-    failFast: boolean;
-    only?: string;
-    exclude?: string;
-  } = {
+};
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const res: ParsedArgs = {
     maxFailures: 20,
     failFast: false,
   };
@@ -76,29 +67,6 @@ function parseArgs(argv: string[]): {
   return res;
 }
 
-function readIndexFile(indexPath: string): Case[] {
-  const lines = fs.readFileSync(indexPath, "utf8").split(/\r?\n/);
-  const cases: Case[] = [];
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-
-    // Format (see file header):
-    // - <input rel to t/in> -> <expected rel to Graph-Easy-0.76>
-    const m = /^-\s+(\S+)\s+->\s+(\S+)\s*$/.exec(line);
-    if (!m) {
-      throw new Error(`Bad INDEX.txt line: ${raw}`);
-    }
-
-    const inputRelToInputsRoot = m[1];
-    const expectedRel = m[2];
-    cases.push({ inputRel: path.posix.join("t/in", inputRelToInputsRoot), expectedRel });
-  }
-
-  return cases;
-}
-
 function firstDiffIndex(a: string, b: string): number {
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
@@ -124,50 +92,104 @@ function lineColAt(text: string, idx: number): { line: number; col: number } {
   return { line, col };
 }
 
+function isSupportedFixture(rel: string): boolean {
+  return rel.endsWith(".txt") || rel.endsWith(".dot") || rel.endsWith(".gdl");
+}
+
+function listFixtures(fixturesRoot: string): string[] {
+  const out: string[] = [];
+
+  const walk = (absDir: string, relDir: string): void => {
+    const entries = fs.readdirSync(absDir, { withFileTypes: true });
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+    for (const ent of entries) {
+      const abs = path.join(absDir, ent.name);
+      const rel = relDir ? path.posix.join(relDir, ent.name) : ent.name;
+
+      if (ent.isDirectory()) {
+        walk(abs, rel);
+        continue;
+      }
+
+      if (!ent.isFile()) continue;
+      if (!isSupportedFixture(rel)) continue;
+      out.push(rel);
+    }
+  };
+
+  walk(fixturesRoot, "");
+  return out;
+}
+
+function runTsAscii(nodeExecutable: string, asAsciiJs: string, inputPath: string): childProcess.SpawnSyncReturns<string> {
+  return childProcess.spawnSync(nodeExecutable, [asAsciiJs, inputPath], {
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
+}
+
+function runPerlAscii(repoRoot: string, inputPath: string): childProcess.SpawnSyncReturns<string> {
+  // Use upstream Perl as the oracle; this makes the compare harness self-contained and avoids
+  // stale golden files under GE.bak/examples_output.
+  const perlCwd = path.join(repoRoot, "Graph-Easy-0.76");
+  return childProcess.spawnSync("perl", ["examples/as_ascii", inputPath], {
+    cwd: perlCwd,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
+}
+
 function main(): void {
   const { maxCases, maxFailures, failFast, only, exclude } = parseArgs(process.argv.slice(2));
 
   const repoRoot = process.cwd();
-  const indexPath = path.join(repoRoot, "GE.bak", "examples_output", "INDEX.txt");
+  const inputsRoot = path.join(repoRoot, "Graph-Easy-0.76", "t", "in");
   const asAsciiJs = path.join(repoRoot, "dist", "examples", "as_ascii.js");
 
-  const cases = readIndexFile(indexPath);
+  const fixtures = listFixtures(inputsRoot);
 
   let pass = 0;
   let fail = 0;
+  let skip = 0;
 
-  const limitCases = maxCases ?? cases.length;
+  const limitCases = maxCases ?? fixtures.length;
 
-  for (let i = 0; i < cases.length && i < limitCases; i++) {
-    const c = cases[i];
+  for (let i = 0; i < fixtures.length && i < limitCases; i++) {
+    const rel = fixtures[i];
+    const inputRel = path.posix.join("t/in", rel);
 
-    if (only && !c.inputRel.includes(only)) continue;
-    if (exclude && c.inputRel.includes(exclude)) continue;
+    if (only && !inputRel.includes(only)) continue;
+    if (exclude && inputRel.includes(exclude)) continue;
 
-    const inputPath = path.join(repoRoot, "Graph-Easy-0.76", c.inputRel);
-    const expectedPath = path.join(repoRoot, "GE.bak", c.expectedRel);
+    const inputPath = path.join(inputsRoot, rel);
 
-    const expected = fs.readFileSync(expectedPath, "utf8");
-
-    const run = childProcess.spawnSync(process.execPath, [asAsciiJs, inputPath], {
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-    });
-
-    const stdout = run.stdout ?? "";
-
-    if (run.status !== 0) {
-      fail++;
-      const stderr = run.stderr ?? "";
+    const perl = runPerlAscii(repoRoot, inputPath);
+    if (perl.status !== 0) {
+      skip++;
+      const stderr = perl.stderr ?? "";
       process.stderr.write(
-        `[FAIL:runtime] ${c.inputRel} -> ${c.expectedRel} (exit=${run.status})\n` +
+        `[SKIP:perl] ${inputRel} (exit=${perl.status})\n` +
           (stderr ? stderr.split(/\r?\n/).slice(0, 20).join("\n") + "\n" : "")
+      );
+      continue;
+    }
+
+    const expected = perl.stdout ?? "";
+
+    const ts = runTsAscii(process.execPath, asAsciiJs, inputPath);
+    if (ts.status !== 0) {
+      fail++;
+      const stderr = ts.stderr ?? "";
+      process.stderr.write(
+        `[FAIL:runtime] ${inputRel} (exit=${ts.status})\n` + (stderr ? stderr.split(/\r?\n/).slice(0, 20).join("\n") + "\n" : "")
       );
 
       if (failFast || fail >= maxFailures) break;
       continue;
     }
 
+    const stdout = ts.stdout ?? "";
     if (stdout === expected) {
       pass++;
       continue;
@@ -176,14 +198,12 @@ function main(): void {
     fail++;
     const idx = firstDiffIndex(stdout, expected);
     const pos = idx === -1 ? { line: 1, col: 1 } : lineColAt(expected, idx);
-    process.stderr.write(
-      `[FAIL:diff] ${c.inputRel} -> ${c.expectedRel} (first mismatch at line ${pos.line}, col ${pos.col})\n`
-    );
+    process.stderr.write(`[FAIL:diff] ${inputRel} (first mismatch at line ${pos.line}, col ${pos.col})\n`);
 
     if (failFast || fail >= maxFailures) break;
   }
 
-  process.stdout.write(`pass=${pass} fail=${fail} (maxFailures=${maxFailures})\n`);
+  process.stdout.write(`pass=${pass} fail=${fail} skip=${skip} (maxFailures=${maxFailures})\n`);
   process.exitCode = fail === 0 ? 0 : 1;
 }
 

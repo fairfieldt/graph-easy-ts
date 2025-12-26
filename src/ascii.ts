@@ -58,6 +58,43 @@ interface AlignedLabel {
 
 let currentPreserveLabelWhitespace = false;
 
+function graphTitleForDotEscapes(graph: Graph | undefined): string {
+  return (graph?.graphAttributes.title ?? "").trim();
+}
+
+function expandDotEscapesInGraphLabel(graph: Graph | undefined, rawLabel: string): string {
+  const title = graphTitleForDotEscapes(graph);
+  if (title === "") return rawLabel;
+  return rawLabel.split("\\G").join(title);
+}
+
+function expandDotEscapesInNodeLabel(node: Node, rawLabel: string): string {
+  const title = graphTitleForDotEscapes(node.graph);
+  let out = rawLabel;
+  if (title !== "") {
+    out = out.split("\\G").join(title);
+  }
+  out = out.split("\\N").join(node.id);
+  return out;
+}
+
+function expandDotEscapesInEdgeLabel(edge: Edge, rawLabel: string): string {
+  const title = graphTitleForDotEscapes(edge.graph);
+  let out = rawLabel;
+  if (title !== "") {
+    out = out.split("\\G").join(title);
+  }
+
+  const tail = edge.from.id;
+  const head = edge.to.id;
+  const op = edge.bidirectional ? "<->" : edge.undirected ? "--" : "->";
+
+  out = out.split("\\E").join(`${tail}${op}${head}`);
+  out = out.split("\\T").join(tail);
+  out = out.split("\\H").join(head);
+  return out;
+}
+
 function edgeStyleName(edge: Edge): string {
   const raw = edge.attribute("style").trim();
   return raw === "" ? "solid" : raw;
@@ -392,7 +429,8 @@ function correctSizeEdgeCell(cell: EdgeCell): void {
   } else if ((cell.type & EDGE_LABEL_CELL) !== 0) {
     const align = alignName(cell.edge, "left");
     const wrap = textwrapName(cell.edge);
-    const { lines } = alignedLabel(cell.edge.labelText(), align, wrap);
+    const rawLabel = cell.edge.labelText();
+    const { lines } = alignedLabel(expandDotEscapesInEdgeLabel(cell.edge, rawLabel), align, wrap);
     let { w, h } = labelDimensions(lines);
 
     // edges do not have borders
@@ -413,7 +451,8 @@ function correctSizeNode(node: Node, cells: CellMap): void {
     // (Graph::Easy::As_ascii.pm: as_ascii() branch for shape eq 'edge').
     const align = alignName(node, "left");
     const wrap = textwrapName(node);
-    const { lines } = alignedLabel(node.labelText(), align, wrap);
+    const rawLabel = node.labelText();
+    const { lines } = alignedLabel(expandDotEscapesInNodeLabel(node, rawLabel), align, wrap);
 
     // Graph::Easy treats whitespace-only labels as "no label" for sizing.
     const hasVisibleLabel = lines.some((l) => l !== "");
@@ -460,7 +499,8 @@ function correctSizeNode(node: Node, cells: CellMap): void {
 
   const align = alignName(node, "center");
   const wrap = textwrapName(node);
-  const { lines } = alignedLabel(node.labelText(), align, wrap);
+  const rawLabel = node.labelText();
+  const { lines } = alignedLabel(expandDotEscapesInNodeLabel(node, rawLabel), align, wrap);
   const dims = labelDimensions(lines);
 
   // Graph::Easy still renders an explicitly-empty label as a normal node box with
@@ -1048,7 +1088,8 @@ function drawHor(cell: EdgeCell, fb: Fb, absX: number, absY: number, rx: number)
   if ((cell.type & EDGE_LABEL_CELL) !== 0) {
     const align = alignName(cell.edge, "left");
     const wrap = textwrapName(cell.edge);
-    const label = alignedLabel(cell.edge.labelText(), align, wrap);
+    const rawLabel = cell.edge.labelText();
+    const label = alignedLabel(expandDotEscapesInEdgeLabel(cell.edge, rawLabel), align, wrap);
 
     const ys = 0;
     const ws = xs + xr;
@@ -1091,7 +1132,8 @@ function drawVer(cell: EdgeCell, fb: Fb, absX: number, absY: number): void {
   if ((cell.type & EDGE_LABEL_CELL) !== 0) {
     const align = alignName(cell.edge, "left");
     const wrap = textwrapName(cell.edge);
-    const label = alignedLabel(cell.edge.labelText(), align, wrap);
+    const rawLabel = cell.edge.labelText();
+    const label = alignedLabel(expandDotEscapesInEdgeLabel(cell.edge, rawLabel), align, wrap);
 
     // Place the label to the right of the vertical stroke (which is at x+2), leaving
     // one space after the stroke. Use the full vertical height for centering.
@@ -1317,7 +1359,8 @@ function insertEdgeLabel(
 
   const align = alignName(cell.edge, "left");
   const wrap = textwrapName(cell.edge);
-  const label = alignedLabel(cell.edge.labelText(), align, wrap);
+  const rawLabel = cell.edge.labelText();
+  const label = alignedLabel(expandDotEscapesInEdgeLabel(cell.edge, rawLabel), align, wrap);
 
   // Perl supports negative ys to align relative to the bottom.
   let y = ys;
@@ -1610,7 +1653,8 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
 
     const align = alignName(node, "left");
     const wrap = textwrapName(node);
-    const label = alignedLabel(node.labelText(), align, wrap);
+    const rawLabel = node.labelText();
+    const label = alignedLabel(expandDotEscapesInNodeLabel(node, rawLabel), align, wrap);
 
     const xs = 1;
     const ys = 0;
@@ -1776,7 +1820,8 @@ function drawNode(node: Node, cells: CellMap, fb: Fb, absX: number, absY: number
 
   const align = alignName(node, "center");
   const wrap = textwrapName(node);
-  const label = alignedLabel(node.labelText(), align, wrap);
+  const rawLabel = node.labelText();
+  const label = alignedLabel(expandDotEscapesInNodeLabel(node, rawLabel), align, wrap);
 
   if (border === "none") {
     // Ported from Graph::Easy::As_ascii.pm::_draw_label.
@@ -1917,7 +1962,8 @@ export function renderAscii(graph: Graph): string {
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   const out = lines.join("\n") + "\n";
 
-  const graphLabel = graph.graphAttributes.label?.trim() ?? "";
+  const graphLabelRaw = graph.graphAttributes.label?.trim() ?? "";
+  const graphLabel = expandDotEscapesInGraphLabel(graph, graphLabelRaw).trim();
   if (graphLabel === "") return out;
 
   const labelPosRaw = graph.graphAttributes.labelpos?.trim().toLowerCase() ?? "";
