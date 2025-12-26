@@ -218,15 +218,33 @@ function parseCurlyBlock(s: string, pos: number): ParseBlock {
     throw new Error(`Expected '{' at pos ${pos}`);
   }
 
+  // Graph::Easy attribute blocks do not nest. Importantly, attribute *values* can
+  // contain '{' characters (e.g. labels containing "digraph G {") and these must
+  // not confuse the block terminator scan.
   let i = pos + 1;
-  let depth = 1;
+  let escaped = false;
+  let quote: '"' | "'" | undefined;
   for (; i < s.length; i++) {
     const ch = s[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) break;
+    if (escaped) {
+      escaped = false;
+      continue;
     }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch as '"' | "'";
+      continue;
+    }
+
+    if (ch === "}") break;
   }
 
   if (i >= s.length || s[i] !== "}") {
@@ -349,6 +367,22 @@ class GraphEasyParser {
       let line = rawLines[i];
 
       const shouldJoinContinuationLine = (s: string): boolean => {
+        // Multi-line group blocks intentionally start with an unbalanced '(' header line:
+        //   ( Group Name
+        //     ...
+        //   )
+        // These must *not* be joined into a single logical line; parseLogicalLine()
+        // handles group open/close on separate logical lines.
+        const headerLine = s.trim();
+        if (
+          headerLine.startsWith("(") &&
+          !headerLine.includes(")") &&
+          !headerLine.includes("[") &&
+          !/[\-\.=<>~]/.test(headerLine)
+        ) {
+          return false;
+        }
+
         if (!isBalancedForLine(s)) return true;
 
         const trimmedEnd = stripLineComment(s).trimEnd();

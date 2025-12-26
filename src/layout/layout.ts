@@ -2439,13 +2439,6 @@ export function layoutGraph(graph: Graph): CellMap {
     const main = bRoot - aRoot || b.len - a.len || aHasOrigin - bHasOrigin;
     if (main) return main;
 
-    // Perl uses deterministic ordering for tie-breaking. Most chains are ordered by
-    // node name; however, completely isolated single-node chains behave like leftover
-    // nodes and follow creation order (numeric id).
-    if (aIsolated && bIsolated) {
-      return cmpStr(String(a.start.numericId), String(b.start.numericId));
-    }
-
     return cmpStr(a.start.id, b.start.id);
   });
 
