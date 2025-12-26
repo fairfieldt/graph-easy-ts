@@ -1,4 +1,7 @@
+/// <reference types="vite/client" />
+
 import { Parser } from "../../src/parser";
+import { instance as vizInstance, type Viz } from "@viz-js/viz";
 
 const EXAMPLE = String.raw`# Minimal example
 [ A ] --> [ B ]
@@ -6,6 +9,8 @@ const EXAMPLE = String.raw`# Minimal example
 `;
 
 type StatusKind = "idle" | "ok" | "err" | "busy";
+
+type OutputFormat = "ascii" | "boxart" | "txt" | "graphviz";
 
 function setPill(el: HTMLElement, kind: StatusKind, text: string): void {
   el.textContent = text;
@@ -52,7 +57,20 @@ function diffAscii(a: string, b: string): string {
   return out.join("\n");
 }
 
+function parseOutputFormat(raw: string): OutputFormat {
+  if (raw === "ascii" || raw === "boxart" || raw === "txt" || raw === "graphviz") return raw;
+  throw new Error(`Unknown output format: ${raw}`);
+}
+
 declare const Perl: any;
+
+type GraphvizView = "rendered" | "text";
+
+let vizPromise: Promise<Viz> | undefined;
+function getViz(): Promise<Viz> {
+  if (!vizPromise) vizPromise = vizInstance();
+  return vizPromise;
+}
 
 type WebPerlState =
   | { kind: "loading" }
@@ -148,17 +166,21 @@ async function initWebPerl(perlStatus: HTMLElement, perlOutput: HTMLElement): Pr
   setPill(perlStatus, "ok", `ready (${files.length} files)`);
 }
 
-function renderTs(text: string): { ascii: string; ms: number } {
+function renderTs(text: string, format: OutputFormat): { out: string; ms: number } {
   const t0 = performance.now();
   const graph = Parser.fromText(text);
   graph.timeout = 360;
   graph.layout();
-  const ascii = graph.asAscii();
+  let out = "";
+  if (format === "ascii") out = graph.asAscii();
+  else if (format === "boxart") out = graph.asBoxart();
+  else if (format === "txt") out = graph.asTxt();
+  else out = graph.asGraphviz();
   const ms = performance.now() - t0;
-  return { ascii, ms };
+  return { out, ms };
 }
 
-function renderPerl(text: string): { ascii: string; ms: number } {
+function renderPerl(text: string, format: OutputFormat): { out: string; ms: number } {
   if (webPerlState.kind !== "ready") {
     if (webPerlState.kind === "error") {
       throw new Error(webPerlState.error);
@@ -180,16 +202,29 @@ function renderPerl(text: string): { ascii: string; ms: number } {
   FS.writeFile("/tmp/input.txt", text);
 
   const t0 = performance.now();
+  const formatLiteral = JSON.stringify(format);
   const code = String.raw`
 use lib '/Graph-Easy-0.76/lib';
 use Graph::Easy::Parser;
+
+my $format = ${formatLiteral};
 
 my $out = eval {
   my $parser = Graph::Easy::Parser->new();
   my $txt = do { local $/; open my $fh, '<', '/tmp/input.txt' or die $!; <$fh> };
   my $graph = $parser->from_text($txt);
   $graph->layout();
-  $graph->as_ascii();
+  if ($format eq 'ascii') {
+    $graph->as_ascii();
+  } elsif ($format eq 'boxart') {
+    $graph->as_boxart();
+  } elsif ($format eq 'txt') {
+    $graph->as_txt();
+  } elsif ($format eq 'graphviz') {
+    $graph->as_graphviz();
+  } else {
+    die "Unknown format: $format";
+  }
 };
 
 if ($@) {
@@ -199,30 +234,41 @@ if ($@) {
 }
 `;
 
-  let ascii: string;
+  let out: string;
   try {
-    ascii = String(Perl.eval(code) ?? "");
+    out = String(Perl.eval(code) ?? "");
   } catch (e) {
     const msg = String(e);
     // If Perl entered an unrecoverable state, restart it once and retry.
     if (msg.toLowerCase().includes("state ended")) {
       Perl.start(["-e", "0"]);
-      ascii = String(Perl.eval(code) ?? "");
+      out = String(Perl.eval(code) ?? "");
     } else {
       throw e;
     }
   }
   const ms = performance.now() - t0;
-  return { ascii, ms };
+  return { out, ms };
 }
 
 function main(): void {
   const input = document.getElementById("input") as HTMLTextAreaElement;
   const btnRun = document.getElementById("btn-run") as HTMLButtonElement;
   const btnReset = document.getElementById("btn-reset") as HTMLButtonElement;
+  const outputFormat = document.getElementById("output-format") as HTMLSelectElement;
 
+  const tsSvg = document.getElementById("ts-svg") as HTMLElement;
   const tsOut = document.getElementById("ts-output") as HTMLElement;
+  const tsTabs = document.getElementById("ts-tabs") as HTMLElement;
+  const tsTabRendered = document.getElementById("ts-tab-rendered") as HTMLButtonElement;
+  const tsTabText = document.getElementById("ts-tab-text") as HTMLButtonElement;
+
+  const perlSvg = document.getElementById("perl-svg") as HTMLElement;
   const perlOut = document.getElementById("perl-output") as HTMLElement;
+  const perlTabs = document.getElementById("perl-tabs") as HTMLElement;
+  const perlTabRendered = document.getElementById("perl-tab-rendered") as HTMLButtonElement;
+  const perlTabText = document.getElementById("perl-tab-text") as HTMLButtonElement;
+
   const diffOut = document.getElementById("diff-output") as HTMLElement;
 
   const tsStatus = document.getElementById("ts-status") as HTMLElement;
@@ -231,14 +277,82 @@ function main(): void {
 
   input.value = EXAMPLE;
 
-  const run = () => {
+  let tsView: GraphvizView = "rendered";
+  let perlView: GraphvizView = "rendered";
+  let lastFormat: OutputFormat | undefined;
+  let runSeq = 0;
+
+  const setTabsVisible = (visible: boolean) => {
+    if (visible) {
+      tsTabs.classList.remove("is-hidden");
+      perlTabs.classList.remove("is-hidden");
+      return;
+    }
+    tsTabs.classList.add("is-hidden");
+    perlTabs.classList.add("is-hidden");
+  };
+
+  const setGraphvizView = (pane: "ts" | "perl", view: GraphvizView) => {
+    const isRendered = view === "rendered";
+
+    if (pane === "ts") {
+      tsView = view;
+      tsTabRendered.classList.toggle("tab--active", isRendered);
+      tsTabText.classList.toggle("tab--active", !isRendered);
+      tsSvg.classList.toggle("is-hidden", !isRendered);
+      tsOut.classList.toggle("is-hidden", isRendered);
+      return;
+    }
+
+    perlView = view;
+    perlTabRendered.classList.toggle("tab--active", isRendered);
+    perlTabText.classList.toggle("tab--active", !isRendered);
+    perlSvg.classList.toggle("is-hidden", !isRendered);
+    perlOut.classList.toggle("is-hidden", isRendered);
+  };
+
+  tsTabRendered.addEventListener("click", () => setGraphvizView("ts", "rendered"));
+  tsTabText.addEventListener("click", () => setGraphvizView("ts", "text"));
+  perlTabRendered.addEventListener("click", () => setGraphvizView("perl", "rendered"));
+  perlTabText.addEventListener("click", () => setGraphvizView("perl", "text"));
+
+  const run = async () => {
+    const mySeq = ++runSeq;
     const text = input.value;
+    const format = parseOutputFormat(outputFormat.value);
+
+    const formatJustChangedToGraphviz = format === "graphviz" && lastFormat !== "graphviz";
+    lastFormat = format;
+
+    if (format === "graphviz") {
+      setTabsVisible(true);
+      if (formatJustChangedToGraphviz) {
+        setGraphvizView("ts", "rendered");
+        setGraphvizView("perl", "rendered");
+      }
+    } else {
+      setTabsVisible(false);
+      tsSvg.classList.add("is-hidden");
+      perlSvg.classList.add("is-hidden");
+      tsOut.classList.remove("is-hidden");
+      perlOut.classList.remove("is-hidden");
+      tsView = "text";
+      perlView = "text";
+    }
+
+    // Clear previous rendered outputs early so we don't show stale SVGs.
+    if (format === "graphviz") {
+      tsSvg.replaceChildren();
+      perlSvg.replaceChildren();
+    }
 
     // TS
+    let tsText = "";
     try {
       setPill(tsStatus, "busy", "running…");
-      const { ascii, ms } = renderTs(text);
-      tsOut.textContent = ascii;
+      const { out, ms } = renderTs(text, format);
+      tsText = out;
+      tsOut.textContent = out;
       setPill(tsStatus, "ok", `${ms.toFixed(1)}ms`);
     } catch (e) {
       const msg = e instanceof Error ? e.stack ?? e.message : String(e);
@@ -255,10 +369,10 @@ function main(): void {
           webPerlState.kind === "error" ? webPerlState.error : "WebPerl is still initializing…";
       } else {
         setPill(perlStatus, "busy", "running…");
-        const { ascii, ms } = renderPerl(text);
-        perlAscii = ascii;
-        perlOut.textContent = ascii;
-        if (ascii.trimStart().startsWith("ERROR:")) {
+        const { out, ms } = renderPerl(text, format);
+        perlAscii = out;
+        perlOut.textContent = out;
+        if (out.trimStart().startsWith("ERROR:")) {
           setPill(perlStatus, "err", "error");
         } else {
           setPill(perlStatus, "ok", `${ms.toFixed(1)}ms`);
@@ -268,6 +382,49 @@ function main(): void {
       const msg = e instanceof Error ? e.stack ?? e.message : String(e);
       perlOut.textContent = msg;
       setPill(perlStatus, "err", "error");
+    }
+
+    // If graphviz, also render SVG previews (default tab).
+    if (format === "graphviz") {
+      try {
+        const viz = await getViz();
+
+        if (mySeq !== runSeq) return;
+
+        if (tsText.trimStart().startsWith("ERROR:")) {
+          tsSvg.textContent = tsText;
+          setPill(tsStatus, "err", "dot error");
+        } else {
+          const svg = viz.renderSVGElement(tsText);
+          tsSvg.replaceChildren(svg);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.stack ?? e.message : String(e);
+        tsSvg.textContent = msg;
+        setPill(tsStatus, "err", "svg error");
+      }
+
+      try {
+        const viz = await getViz();
+
+        if (mySeq !== runSeq) return;
+
+        if (perlAscii.trimStart().startsWith("ERROR:")) {
+          perlSvg.textContent = perlAscii;
+          setPill(perlStatus, "err", "dot error");
+        } else {
+          const svg = viz.renderSVGElement(perlAscii);
+          perlSvg.replaceChildren(svg);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.stack ?? e.message : String(e);
+        perlSvg.textContent = msg;
+        setPill(perlStatus, "err", "svg error");
+      }
+
+      // Ensure the currently selected tab state matches view variables.
+      setGraphvizView("ts", tsView);
+      setGraphvizView("perl", perlView);
     }
 
     // Diff
@@ -284,28 +441,29 @@ function main(): void {
     }
   };
 
-  const runDebounced = debounce(run, 150);
+  const runDebounced = debounce(() => void run(), 150);
 
   // Kick off WebPerl init, but don’t block TS renders. Once Perl is ready,
   // trigger a rerender so the Perl pane fills in without requiring user input.
   initWebPerl(perlStatus, perlOut)
-    .then(() => run())
+    .then(() => void run())
     .catch((e) => {
       webPerlState = { kind: "error", error: String(e) };
       setPill(perlStatus, "err", "init failed");
       perlOut.textContent = String(e);
-      run();
+      void run();
     });
 
   input.addEventListener("input", runDebounced);
-  btnRun.addEventListener("click", run);
+  outputFormat.addEventListener("change", () => void run());
+  btnRun.addEventListener("click", () => void run());
   btnReset.addEventListener("click", () => {
     input.value = EXAMPLE;
-    run();
+    void run();
   });
 
   // Initial render
-  run();
+  void run();
 }
 
 main();

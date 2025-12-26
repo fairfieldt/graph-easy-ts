@@ -24,5 +24,8 @@
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vite": "^7.3.0"
+  },
+  "dependencies": {
+    "@viz-js/viz": "^3.24.0"
   }
 }

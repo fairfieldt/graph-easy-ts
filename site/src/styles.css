@@ -110,6 +110,62 @@ html, body {
   align-items: center;
 }
 
+.format {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.format__label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.select {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.10);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.select:hover {
+  background: rgba(255,255,255,0.14);
+}
+
+.tabs {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0,0,0,0.20);
+}
+
+.tab {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tab:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+}
+
+.tab--active {
+  background: rgba(255,255,255,0.12);
+  color: var(--text);
+}
+
+.is-hidden {
+  display: none !important;
+}
+
 .textarea {
   width: 100%;
   min-height: 200px;
@@ -148,6 +204,19 @@ html, body {
   background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
   border-top: 1px solid var(--border);
   white-space: pre;
+}
+
+.output--svg {
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.output--svg svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
 }
 
 .button {

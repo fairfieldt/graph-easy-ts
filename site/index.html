@@ -30,6 +30,15 @@
             <div class="card__hint">Paste Graph::Easy syntax here. Both engines render from the exact same text.</div>
           </div>
           <div class="card__headerRight">
+            <div class="format">
+              <label class="format__label" for="output-format">Output Format</label>
+              <select class="select" id="output-format">
+                <option value="ascii" selected>ascii</option>
+                <option value="boxart">boxart</option>
+                <option value="txt">txt</option>
+                <option value="graphviz">graphviz</option>
+              </select>
+            </div>
             <button class="button" id="btn-run">Run</button>
             <button class="button button--ghost" id="btn-reset">Reset example</button>
           </div>
@@ -44,8 +53,15 @@
               <div class="card__title">TypeScript</div>
               <div class="card__hint">Runs the TS port in this repo (parse → layout → asAscii).</div>
             </div>
-            <div class="pill" id="ts-status">idle</div>
+            <div class="card__headerRight">
+              <div class="tabs is-hidden" id="ts-tabs">
+                <button class="tab tab--active" id="ts-tab-rendered" type="button">Rendered</button>
+                <button class="tab" id="ts-tab-text" type="button">Text</button>
+              </div>
+              <div class="pill" id="ts-status">idle</div>
+            </div>
           </div>
+          <div class="output output--svg is-hidden" id="ts-svg"></div>
           <pre class="output" id="ts-output"></pre>
         </div>
 
@@ -55,8 +71,15 @@
               <div class="card__title">Perl</div>
               <div class="card__hint">Original Graph::Easy 0.76 running in-browser via WebPerl.</div>
             </div>
-            <div class="pill" id="perl-status">loading…</div>
+            <div class="card__headerRight">
+              <div class="tabs is-hidden" id="perl-tabs">
+                <button class="tab tab--active" id="perl-tab-rendered" type="button">Rendered</button>
+                <button class="tab" id="perl-tab-text" type="button">Text</button>
+              </div>
+              <div class="pill" id="perl-status">loading…</div>
+            </div>
           </div>
+          <div class="output output--svg is-hidden" id="perl-svg"></div>
           <pre class="output" id="perl-output"></pre>
         </div>
 
