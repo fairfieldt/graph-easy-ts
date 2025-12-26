@@ -1,0 +1,3 @@
+node.cities { color: blue; }
+( German Cities [ Berlin ] -> [ Potsdam ]
+) { border-style: dashed; nodeclass: cities; }

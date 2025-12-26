@@ -1,0 +1,4 @@
+[ A | B | C ] # basename: ABC
+[ A | B | C ] # basename: ABC-1
+[ C | D | E ] # basename: CDE
+[ C | D | E ] # basename: CDE-2

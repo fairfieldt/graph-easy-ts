@@ -1,5 +1,7 @@
 import { mergeAttributes, type Attributes } from "./attributes";
 
+import { validateGroupAttributes } from "./validate";
+
 import type { Graph } from "./graph";
 import type { Node } from "./node";
 import type { GroupCell } from "./layout/groupCell";
@@ -26,6 +28,7 @@ export class Group {
   }
 
   public setAttributes(attrs: Attributes): void {
+    validateGroupAttributes(attrs);
     mergeAttributes(this.attributes, attrs);
     mergeAttributes(this.explicitAttributes, attrs);
   }

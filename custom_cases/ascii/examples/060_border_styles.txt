@@ -1,0 +1,1 @@
+[ Normal ] --> [ Bold ] { border: bold; } --> [ Broad ] { border: broad; } --> [ Wide ] { border: wide; } --> [ Bold-Dash ] { border: bold-dash; }

@@ -1,0 +1,1 @@
+[ Baz;Bar ] --> { label: "Baz;Bar"; } [ Bonn ] { label: \;\;; }

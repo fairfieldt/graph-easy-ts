@@ -1,0 +1,6 @@
+edge { color: blue; }
+edge.train { color: darkblue; }
+node { color: green; }
+node.cities { color: darkgreen; }
+group { color: brown; }
+group.cities { color: darkbrown; }

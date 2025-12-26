@@ -1,0 +1,6 @@
+##############################################################
+# This is a good comment.
+##############################################################
+#This is bad.
+node { label: #5; } # Note the ""!
+edge { color: #aabbcc; } # the color value will be all right

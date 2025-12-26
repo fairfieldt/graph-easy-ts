@@ -1,0 +1,1 @@
+[ A ] -- open --> [ B ] -- closed --> { arrowstyle: closed; } [ C ] -- filled --> { arrowstyle: filled; } [ D ] -- filled --> { arrowstyle: filled; fill: lime; } [ E ] -- none --> { arrowstyle: none; } [ F ]

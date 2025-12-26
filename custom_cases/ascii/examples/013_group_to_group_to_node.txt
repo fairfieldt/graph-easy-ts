@@ -1,0 +1,6 @@
+[ From Node to Group ] --> ( German cities:
+[ Berlin ] -> [ Potsdam ]
+) -- group to group -->
+( German rivers:
+[ Rhein ] -> [ Elbe ]
+) --> [ From Group to Node ]

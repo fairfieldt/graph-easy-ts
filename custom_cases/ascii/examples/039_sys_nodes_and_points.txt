@@ -1,0 +1,1 @@
+[ $sys$Node ] { shape: invisible; title: You don't see me! } -> [ Bischofswerda ] -> [ Borna ] { shape: point; point-style: invisible; } -> [ Bremen ] -> [ $sys$Node ]

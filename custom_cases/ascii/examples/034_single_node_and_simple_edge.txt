@@ -1,0 +1,2 @@
+[ Single node ]
+[ Node A ] --> [ Node B ]

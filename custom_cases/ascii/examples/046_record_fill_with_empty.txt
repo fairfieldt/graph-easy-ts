@@ -1,0 +1,2 @@
+node { fill: white; }
+[ Bonn | Berlin | Hahn | Ulm ] { fill: red||blue; }

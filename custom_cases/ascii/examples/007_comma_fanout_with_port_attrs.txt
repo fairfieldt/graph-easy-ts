@@ -1,0 +1,2 @@
+[ Potsdam ], [ Mannheim ] --> { end: back,0; }
+[ Weimar ] --> { start: front,0; } [ Finsterwalde ], [ Aachen ]

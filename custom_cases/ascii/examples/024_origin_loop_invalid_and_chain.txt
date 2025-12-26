@@ -1,0 +1,5 @@
+[ A ] { origin: B; offset: 1,1; }
+[ B ] { origin: A; offset: 1,1; } # invalid!
+[ C ] { origin: E; offset: 1,1; }
+[ D ] { origin: C; offset: 1,1; }
+[ E ] { origin: C; offset: 1,1; } # invalid!

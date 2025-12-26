@@ -1,0 +1,4 @@
+graph { color: red; }
+edge { color: blue; }
+node { color: green; }
+group { color: brown; }

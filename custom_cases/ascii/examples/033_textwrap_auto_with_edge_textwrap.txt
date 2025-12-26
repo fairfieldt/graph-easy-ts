@@ -1,0 +1,3 @@
+graph { textwrap: auto; } [ Long Node Label left right center ]
+-- A long edge label --> { text-wrap: 10; }
+[ B ]

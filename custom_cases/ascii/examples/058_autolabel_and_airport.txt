@@ -1,0 +1,3 @@
+graph { autolabel: 20; autotitle: name; } [ Bonn ]
+-- Acme Travels Incorporated -->
+[ Frankfurt (Main) / Flughafen ]

@@ -75,6 +75,7 @@ function unquoteName(name: string, noCollapse = false): string {
 function isBalancedForLine(line: string): boolean {
   let square = 0;
   let curly = 0;
+  let paren = 0;
   let escaped = false;
 
   for (let i = 0; i < line.length; i++) {
@@ -92,9 +93,13 @@ function isBalancedForLine(line: string): boolean {
     else if (ch === "]" && square > 0) square--;
     else if (ch === "{") curly++;
     else if (ch === "}" && curly > 0) curly--;
+    else if (square === 0 && curly === 0) {
+      if (ch === "(") paren++;
+      else if (ch === ")" && paren > 0) paren--;
+    }
   }
 
-  return square === 0 && curly === 0;
+  return square === 0 && curly === 0 && paren === 0;
 }
 
 function splitTopLevel(input: string, sep: string): string[] {
@@ -343,6 +348,31 @@ class GraphEasyParser {
     for (let i = 0; i < rawLines.length; i++) {
       let line = rawLines[i];
 
+      const shouldJoinContinuationLine = (s: string): boolean => {
+        if (!isBalancedForLine(s)) return true;
+
+        const trimmedEnd = stripLineComment(s).trimEnd();
+        if (!trimmedEnd) return false;
+
+        // A trailing comma indicates the statement continues on the next physical line
+        // (e.g. multi-line comma lists of nodes/targets).
+        if (/,[\s]*$/.test(trimmedEnd)) return true;
+
+        // A balanced statement that ends with a complete element (`]`, `)`) or a
+        // complete attribute block (`}`) is normally a full logical line.
+        if (/[\]\)\}]\s*$/.test(trimmedEnd)) return false;
+
+        // Graph::Easy allows splitting an edge label/operator across multiple physical
+        // lines, e.g.:
+        //   [ A ] -- label
+        //     continued --> [ B ]
+        // In these cases, Perl keeps joining with a space until the statement reaches
+        // the next element.
+        const hasNodeOrGroup = /[\[\(]/.test(trimmedEnd);
+        const hasEdgeOpChar = /[\-\.=<>~]/.test(trimmedEnd);
+        return hasNodeOrGroup && hasEdgeOpChar;
+      };
+
       // Support multi-line scope headers like:
       //   graph
       //   {
@@ -359,7 +389,7 @@ class GraphEasyParser {
         line += " " + rawLines[i].trim();
       }
 
-      while (!isBalancedForLine(line) && i + 1 < rawLines.length) {
+      while (shouldJoinContinuationLine(line) && i + 1 < rawLines.length) {
         const nextRaw = rawLines[i + 1];
         const nextTrim = nextRaw.trim();
         const nextForJoin = inUnclosedSquare(line) ? nextRaw.trimEnd() : nextTrim;
@@ -405,6 +435,60 @@ class GraphEasyParser {
             }
           }
         }
+      }
+
+      // The node-attrs join above can introduce a trailing comma (e.g. `} ,`) which
+      // indicates a continued comma list on the next physical line. Re-run the
+      // continuation join after the node-attrs join so we don't split such lists
+      // into separate logical lines.
+      while (shouldJoinContinuationLine(line) && i + 1 < rawLines.length) {
+        const nextRaw = rawLines[i + 1];
+        const nextTrim = nextRaw.trim();
+        const nextForJoin = inUnclosedSquare(line) ? nextRaw.trimEnd() : nextTrim;
+        i++;
+        line += " " + nextForJoin;
+        if (nextTrim === "}") break;
+      }
+
+      // After pulling in additional elements (e.g. `, [ GHI ]`), the line may now
+      // end with a node token whose attribute block starts on the following lines.
+      // Attach that block too (so multi-line comma lists like `[X]{...}, [Y]\n{...}`
+      // stay on a single logical line).
+      if (isBalancedForLine(line)) {
+        const trimmedEnd = line.trimEnd();
+        if (trimmedEnd.endsWith("]")) {
+          let j = i + 1;
+          while (j < rawLines.length) {
+            const t = rawLines[j].trim();
+            if (t === "" || t.startsWith("#")) {
+              j += 1;
+              continue;
+            }
+            break;
+          }
+          if (j < rawLines.length && rawLines[j].trim().startsWith("{")) {
+            i = j;
+            line += " " + rawLines[i].trim();
+
+            while (!isBalancedForLine(line) && i + 1 < rawLines.length) {
+              const nextRaw = rawLines[i + 1];
+              const nextTrim = nextRaw.trim();
+              const nextForJoin = inUnclosedSquare(line) ? nextRaw.trimEnd() : nextTrim;
+              i++;
+              line += " " + nextForJoin;
+              if (nextTrim === "}") break;
+            }
+          }
+        }
+      }
+
+      while (shouldJoinContinuationLine(line) && i + 1 < rawLines.length) {
+        const nextRaw = rawLines[i + 1];
+        const nextTrim = nextRaw.trim();
+        const nextForJoin = inUnclosedSquare(line) ? nextRaw.trimEnd() : nextTrim;
+        i++;
+        line += " " + nextForJoin;
+        if (nextTrim === "}") break;
       }
       logicalLines.push(line);
     }
@@ -703,6 +787,37 @@ class GraphEasyParser {
     let line = stripLineComment(rawLine).trim();
     if (!line) return;
 
+    const consumeLeadingScopeAttributes = (input: string): string => {
+      let rest = input;
+      while (true) {
+        const trimmed = rest.trimStart();
+        if (!trimmed) return "";
+
+        // Don't misinterpret chains as scope definitions.
+        const looksLikeClassSelector = /^\.[A-Za-z0-9_-]/.test(trimmed);
+        if (trimmed.startsWith("[") || trimmed.startsWith("(") || (startsWithEdgeOp(trimmed) && !looksLikeClassSelector)) {
+          return trimmed;
+        }
+
+        const braceIdx = trimmed.indexOf("{");
+        if (braceIdx === -1) return trimmed;
+
+        // Read the first balanced attribute block and treat `selectors { ... }` as a
+        // scope definition prefix (Graph::Easy allows e.g. `graph { ... } [A] -> [B]`).
+        const blk = parseCurlyBlock(trimmed, braceIdx);
+        const prefix = trimmed.slice(0, blk.nextPos).trim();
+
+        if (!this.tryParseScopeAttributes(prefix)) {
+          return trimmed;
+        }
+
+        rest = trimmed.slice(blk.nextPos).trim();
+      }
+    };
+
+    line = consumeLeadingScopeAttributes(line);
+    if (!line) return;
+
     // Cross-line list fanout applies only to the *immediately following* logical line.
     // Capture+clear it up-front so it can't leak further.
     let listEdgeSources: Node[] | undefined = undefined;
@@ -758,11 +873,10 @@ class GraphEasyParser {
 
     // Perl Graph::Easy list-attribute semantics:
     // For a comma-separated list of *node statements* on a single logical line,
-    // merge all attribute blocks left-to-right and apply the merged attributes
-    // to every node in the list.
+    // apply each node's attribute block retroactively to all nodes earlier in the
+    // list (but do not automatically propagate earlier attrs forward).
     if (!this.pendingEdge && commaParts.length > 1) {
       const nodeParts: string[] = [];
-      const mergedAttrs: Attributes = {};
       let allNodeStatements = true;
 
       for (const partRaw of commaParts) {
@@ -770,26 +884,7 @@ class GraphEasyParser {
         if (!part) continue;
         nodeParts.push(part);
 
-        if (!part.startsWith("[")) {
-          allNodeStatements = false;
-          break;
-        }
-
-        try {
-          const sq = parseSquareBlock(part, 0);
-          let p = skipWs(part, sq.nextPos);
-
-          if (p < part.length && part[p] === "{") {
-            const blk = parseCurlyBlock(part, p);
-            Object.assign(mergedAttrs, parseAttributesBlock(blk.blockText));
-            p = skipWs(part, blk.nextPos);
-          }
-
-          if (p !== part.length) {
-            allNodeStatements = false;
-            break;
-          }
-        } catch {
+        if (!isNodeStatementOnly(part)) {
           allNodeStatements = false;
           break;
         }
@@ -802,11 +897,19 @@ class GraphEasyParser {
           if (consumed !== part.length) {
             throw new Error(`Unexpected trailing content after node list item: ${part}`);
           }
-          if (this.lastChainNode) nodes.push(this.lastChainNode);
-        }
 
-        if (Object.keys(mergedAttrs).length) {
-          for (const n of nodes) n.setAttributes(mergedAttrs);
+          const n = this.lastChainNode;
+          if (!n) continue;
+
+          // Apply this node's attrs (if any) to all nodes earlier in the list.
+          const ownAttrs = this.lastParsedNodeAttrs;
+          if (ownAttrs) {
+            for (const prev of nodes) {
+              prev.setAttributes(ownAttrs);
+            }
+          }
+
+          nodes.push(n);
         }
 
         // Remember this list for a possible following edge-leading statement.
@@ -973,6 +1076,16 @@ class GraphEasyParser {
         // Continue parsing any remaining content after the node.
         part = trimmed.slice(nodeRes.nextPos);
         part = part.trim();
+
+        // If the statement continues with a new edge operator, we're starting a new
+        // edge list from `to`. Do not let comma-target fanout state from the resolved
+        // pending edge leak into this new edge list.
+        if (startsWithEdgeOp(part)) {
+          commaEdgeList = undefined;
+          commaFanoutSources = undefined;
+          commaTargetNodes = [];
+          commaTargetMergedAttrs = undefined;
+        }
         if (!part) continue;
       }
 
@@ -1008,23 +1121,33 @@ class GraphEasyParser {
       // If this line started with an edge operator after a node list, and we ended up
       // producing a pending edge (because the target node is on the next logical line),
       // preserve the full source list so we can fan out when the edge is resolved.
-      if (listEdgeSources && listEdgeSources.length > 0 && this.pendingEdge) {
-        this.pendingEdge.fanoutSources = listEdgeSources;
+      if (this.pendingEdge) {
+        const sources = new Set<Node>();
+        if (listEdgeSources) {
+          for (const src of listEdgeSources) sources.add(src);
+        }
+        for (const src of commaSourceNodes) sources.add(src);
+        if (sources.size > 0) this.pendingEdge.fanoutSources = [...sources];
       }
 
       const edgesCreated = this.graph.edges.length - edgesBefore;
       const fanoutSources = commaSourceNodes.length > 0 ? commaSourceNodes : listEdgeSources;
-      if (fanoutSources && fanoutSources.length > 0 && edgesCreated === 1 && this.lastCreatedEdge) {
-        const base = this.lastCreatedEdge;
-        const createdEdge = this.graph.edges[this.graph.edges.length - 1];
+      if (fanoutSources && fanoutSources.length > 0 && edgesCreated >= 1) {
+        const firstEdge = this.graph.edges[edgesBefore];
 
         // Persist these sources for any additional comma targets in this edge list.
-        commaFanoutSources = fanoutSources;
+        // For multi-edge chains we only fan out the *first* edge segment (the one
+        // leaving the comma-specified sources).
+        if (edgesCreated === 1) {
+          commaFanoutSources = fanoutSources;
+        }
 
         for (const srcNode of fanoutSources) {
-          if (srcNode === base.from) continue;
-          const e = this.graph.addEdge(srcNode, createdEdge.to, base.leftOp, base.rightOp, base.label);
-          if (base.attrs) e.setAttributes(base.attrs);
+          if (srcNode === firstEdge.from) continue;
+          const e = this.graph.addEdge(srcNode, firstEdge.to, firstEdge.leftOp, firstEdge.rightOp, firstEdge.label);
+          if (Object.keys(firstEdge.explicitAttributes).length > 0) {
+            e.setAttributes(firstEdge.explicitAttributes);
+          }
         }
       }
 
@@ -1205,13 +1328,13 @@ class GraphEasyParser {
       this.parseLogicalLine(content);
     }
 
-    const repNode = group.nodes.size > nodesBefore ? this.lastChainNode : undefined;
+    // Perl Graph::Easy does not treat inline group expressions as edge endpoints.
+    // They only define a scoped group and its contents.
+    const repNode: Node | undefined = undefined;
     this.closeGroup();
 
-    // If the group had no nodes, don't let it accidentally change the last-chain node.
-    if (!repNode) {
-      this.lastChainNode = beforeLast;
-    }
+    // Never let inline group parsing affect the outer chain cursor.
+    this.lastChainNode = beforeLast;
 
     let p = par.nextPos;
     p = skipWs(s, p);
