@@ -346,6 +346,27 @@ class GraphEasyParser {
     for (let i = 0; i < rawLines.length; i++) {
       let line = rawLines[i];
 
+      const shouldJoinContinuationLine = (s: string): boolean => {
+        if (!isBalancedForLine(s)) return true;
+
+        const trimmedEnd = stripLineComment(s).trimEnd();
+        if (!trimmedEnd) return false;
+
+        // A balanced statement that ends with a complete element (`]`, `)`) or a
+        // complete attribute block (`}`) is normally a full logical line.
+        if (/[\]\)\}]\s*$/.test(trimmedEnd)) return false;
+
+        // Graph::Easy allows splitting an edge label/operator across multiple physical
+        // lines, e.g.:
+        //   [ A ] -- label
+        //     continued --> [ B ]
+        // In these cases, Perl keeps joining with a space until the statement reaches
+        // the next element.
+        const hasNodeOrGroup = /[\[\(]/.test(trimmedEnd);
+        const hasEdgeOpChar = /[\-\.=<>~]/.test(trimmedEnd);
+        return hasNodeOrGroup && hasEdgeOpChar;
+      };
+
       // Support multi-line scope headers like:
       //   graph
       //   {
@@ -362,7 +383,7 @@ class GraphEasyParser {
         line += " " + rawLines[i].trim();
       }
 
-      while (!isBalancedForLine(line) && i + 1 < rawLines.length) {
+      while (shouldJoinContinuationLine(line) && i + 1 < rawLines.length) {
         const nextRaw = rawLines[i + 1];
         const nextTrim = nextRaw.trim();
         const nextForJoin = inUnclosedSquare(line) ? nextRaw.trimEnd() : nextTrim;

@@ -1,0 +1,6 @@
+[ My
+ long
+ node
+ name ] -- A
+ longer
+ label --> [ B ]

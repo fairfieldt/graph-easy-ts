@@ -1,0 +1,6 @@
+# Custom ASCII parity cases (TS vs bundled Perl Graph::Easy 0.76)
+#
+# Format:
+# - <input file path relative to this directory>
+
+- multiline_label.txt
