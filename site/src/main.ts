@@ -228,6 +228,7 @@ function renderPerl(text: string, format: OutputFormat): { out: string; ms: numb
   const t0 = performance.now();
   const formatLiteral = JSON.stringify(format);
   const code = String.raw`
+use utf8;
 use lib '/Graph-Easy-0.76/lib';
 use Graph::Easy::Parser;
 
@@ -236,6 +237,7 @@ my $format = ${formatLiteral};
 my $out = eval {
   my $parser = Graph::Easy::Parser->new();
   my $txt = do { local $/; open my $fh, '<', '/tmp/input.txt' or die $!; <$fh> };
+  utf8::decode($txt);
   my $graph = $parser->from_text($txt);
   $graph->layout();
   if ($format eq 'ascii') {
