@@ -75,24 +75,30 @@ function parseArgs(argv: string[]): {
   return res;
 }
 
-function readIndexFile(indexPath: string): Case[] {
-  const lines = fs.readFileSync(indexPath, "utf8").split(/\r?\n/);
-  const cases: Case[] = [];
+function walkInputs(inputsRoot: string): string[] {
+  const out: string[] = [];
 
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
+  const walk = (absDir: string, relDirPosix: string): void => {
+    const entries = fs.readdirSync(absDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue;
+      const abs = path.join(absDir, e.name);
+      const rel = relDirPosix ? path.posix.join(relDirPosix, e.name) : e.name;
 
-    const m = /^-\s+(\S+)\s+->\s+(\S+)\s*$/.exec(line);
-    if (!m) {
-      throw new Error(`Bad INDEX.txt line: ${raw}`);
+      if (e.isDirectory()) {
+        walk(abs, rel);
+        continue;
+      }
+
+      // Fixture corpus we currently care about for round-tripping.
+      if (!/\.(txt|dot|gdl)$/.test(e.name)) continue;
+      out.push(rel);
     }
+  };
 
-    const inputRelToInputsRoot = m[1];
-    cases.push({ inputRel: path.posix.join("t/in", inputRelToInputsRoot) });
-  }
-
-  return cases;
+  walk(inputsRoot, "");
+  out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return out;
 }
 
 function firstDiffIndex(a: string, b: string): number {
@@ -123,7 +129,8 @@ function lineColAt(text: string, idx: number): { line: number; col: number } {
 function runPerlAsTxt(repoRoot: string, inputPath: string): childProcess.SpawnSyncReturns<string> {
   const lib = path.join(repoRoot, "Graph-Easy-0.76", "lib");
 
-  const perlCode = `use strict; use warnings; use utf8; use Graph::Easy;\n` +
+  const perlCode =
+    `use strict; use warnings; use utf8; use Graph::Easy;\n` +
     `binmode STDOUT, ':encoding(UTF-8)';\n` +
     // Read as UTF-8 text (not raw bytes) so that non-ASCII fixture content (e.g. Umlauts)
     // round-trips through Perl without mojibake.
@@ -131,24 +138,20 @@ function runPerlAsTxt(repoRoot: string, inputPath: string): childProcess.SpawnSy
     `my $g = Graph::Easy->new($txt); die $g->error if $g->error;\n` +
     `print $g->as_txt();`;
 
-  return childProcess.spawnSync(
-    "perl",
-    ["-I", lib, "-MGraph::Easy", "-e", perlCode, inputPath],
-    {
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-    }
-  );
+  return childProcess.spawnSync("perl", ["-I", lib, "-MGraph::Easy", "-e", perlCode, inputPath], {
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
 }
 
 function main(): void {
   const { maxCases, maxFailures, failFast, only, exclude } = parseArgs(process.argv.slice(2));
 
   const repoRoot = process.cwd();
-  const indexPath = path.join(repoRoot, "GE.bak", "examples_output", "INDEX.txt");
+  const inputsRoot = path.join(repoRoot, "Graph-Easy-0.76", "t", "in");
   const asTxtJs = path.join(repoRoot, "dist", "examples", "as_txt.js");
 
-  const cases = readIndexFile(indexPath);
+  const cases: Case[] = walkInputs(inputsRoot).map((rel) => ({ inputRel: path.posix.join("t/in", rel) }));
 
   let pass = 0;
   let fail = 0;
