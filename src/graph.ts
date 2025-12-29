@@ -10,6 +10,10 @@ import type { NodeCell } from "./layout/nodeCell";
 import { renderAscii, renderBoxart } from "./ascii";
 import { renderTxt } from "./txt.js";
 import { renderGraphviz } from "./graphviz.js";
+import { renderHtml } from "./html.js";
+import { renderGraphml } from "./graphml.js";
+import { renderSvg } from "./svg.js";
+import { renderVcg } from "./vcg.js";
 
 import { validateGroupAttributes } from "./validate";
 
@@ -314,5 +318,21 @@ export class Graph {
 
   public asGraphviz(): string {
     return renderGraphviz(this);
+  }
+
+  public asHtml(): string {
+    return renderHtml(this);
+  }
+
+  public asGraphml(): string {
+    return renderGraphml(this);
+  }
+
+  public asSvg(): string {
+    return renderSvg(this);
+  }
+
+  public asVcg(_format: "vcg" | "gdl" = "vcg"): string {
+    return renderVcg(this);
   }
 }

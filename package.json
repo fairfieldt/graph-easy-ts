@@ -4,6 +4,9 @@
   "private": true,
   "description": "TypeScript port of Graph::Easy (0.76) — ASCII output compatible",
   "license": "UNLICENSED",
+  "bin": {
+    "graph-easy": "dist/src/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "as_ascii": "npm run build --silent && node dist/examples/as_ascii.js",

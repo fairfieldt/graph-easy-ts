@@ -206,8 +206,8 @@ class GdlParser {
       this.expectPunct(":");
       const value = this.parseScalar();
 
-      if (key === "source") source = value;
-      else if (key === "target") target = value;
+      if (key === "source" || key === "sourcename") source = value;
+      else if (key === "target" || key === "targetname") target = value;
       // else ignore
     }
 
