@@ -1,4 +1,5 @@
 import type { Graph } from "./graph";
+import type { Edge } from "./edge";
 import { EdgeCell } from "./layout/edgeCell";
 import { EdgeCellEmpty } from "./layout/edgeCellEmpty";
 import { GroupCell } from "./layout/groupCell";
@@ -12,8 +13,8 @@ import {
   EDGE_END_N,
   EDGE_END_S,
   EDGE_END_W,
-  EDGE_LABEL_CELL,
   EDGE_HOR,
+  EDGE_LABEL_CELL,
   EDGE_N_E,
   EDGE_N_E_W,
   EDGE_N_W,
@@ -36,6 +37,8 @@ type LabelLines = {
 };
 
 type Cell = Node | EdgeCell | GroupCell | NodeCell | EdgeCellEmpty;
+
+const SUB = 4;
 
 function escapeHtml(text: string): string {
   return text
@@ -107,6 +110,99 @@ function labelToHtml(label: string, align: string): string {
   return parts.join("<br>");
 }
 
+function graphLabel(graph: Graph): string {
+  return graph.graphAttributes.label ?? graph.graphAttributes.title ?? "";
+}
+
+function expandEscapes(
+  text: string,
+  graph: Graph,
+  owner: { node?: Node; edge?: Edge },
+  includeLabel: boolean
+): string {
+  let out = text;
+
+  if (owner.edge) {
+    const edge = owner.edge;
+    out = out.replace(/\\E/g, `${edge.from.id}->${edge.to.id}`);
+    out = out.replace(/\\T/g, edge.from.id);
+    out = out.replace(/\\H/g, edge.to.id);
+    if (out.includes("\\N")) {
+      out = out.replace(/\\N/g, edge.labelText());
+    }
+    if (includeLabel && out.includes("\\L")) {
+      out = out.replace(/\\L/g, edge.labelText());
+    }
+  } else if (owner.node) {
+    const node = owner.node;
+    out = out.replace(/\\N/g, node.id);
+    if (includeLabel && out.includes("\\L")) {
+      out = out.replace(/\\L/g, node.labelText());
+    }
+  }
+
+  if (out.includes("\\G")) {
+    out = out.replace(/\\G/g, graphLabel(graph));
+  }
+
+  return out;
+}
+
+function resolveTitleForNode(graph: Graph, node: Node): string {
+  let title = node.attribute("title");
+  if (title === "") {
+    const autotitle = node.attribute("autotitle").trim().toLowerCase();
+    if (autotitle === "name") title = node.id;
+    else if (autotitle === "label") title = node.labelText() || node.id;
+    else if (autotitle === "link") title = node.attribute("link");
+  }
+  if (title === "") return "";
+  return expandEscapes(title, graph, { node }, true);
+}
+
+function resolveTitleForEdge(graph: Graph, edge: Edge): string {
+  let title = edge.attribute("title");
+  if (title === "") {
+    const autotitle = edge.attribute("autotitle").trim().toLowerCase();
+    if (autotitle === "name") title = edge.labelText();
+    else if (autotitle === "label") title = edge.labelText();
+    else if (autotitle === "link") title = edge.attribute("link");
+  }
+  if (title === "") return "";
+  return expandEscapes(title, graph, { edge }, true);
+}
+
+function resolveLinkForNode(node: Node): string {
+  return node.attribute("link");
+}
+
+function resolveLinkForEdge(edge: Edge): string {
+  return edge.attribute("link");
+}
+
+function textStyleFromAttributes(
+  color: string,
+  font: string,
+  fontSizeRaw: string,
+  textStyle: string
+): string {
+  let style = "";
+  if (color) style += `color: ${color};`;
+  if (font) style += ` font-family: ${font};`;
+  if (fontSizeRaw) {
+    const size = /^\d+(\.\d+)?$/.test(fontSizeRaw) ? `${fontSizeRaw}px` : fontSizeRaw;
+    style += ` font-size: ${size};`;
+  }
+
+  const ts = textStyle.trim().toLowerCase();
+  if (ts.includes("bold")) style += " font-weight: bold;";
+  if (ts.includes("italic")) style += " font-style: italic;";
+  if (ts.includes("underline")) style += " text-decoration: underline;";
+  if (ts.includes("none")) style += " text-decoration: none;";
+
+  return style.trim();
+}
+
 function edgeBorderStyle(raw: string): string {
   const style = raw.trim().toLowerCase();
   if (style === "" || style === "solid") return "solid";
@@ -154,121 +250,6 @@ function edgeConnections(baseType: number): { n: boolean; s: boolean; e: boolean
   }
 }
 
-function arrowForDirection(dir: "n" | "s" | "e" | "w"): string {
-  if (dir === "n") return "^";
-  if (dir === "s") return "v";
-  if (dir === "w") return "&lt;";
-  return "&gt;";
-}
-
-function cellSpan(cell: Cell): { cx: number; cy: number } {
-  if (cell instanceof Node) {
-    return { cx: cell.cx ?? 1, cy: cell.cy ?? 1 };
-  }
-  return { cx: 1, cy: 1 };
-}
-
-function nodeCellHtml(node: Node): string {
-  const shape = node.attribute("shape").trim().toLowerCase();
-  if (shape === "invisible") {
-    return "";
-  }
-
-  const align = node.attribute("align") || "center";
-  const label = node.labelText();
-  const content = labelToHtml(label, align);
-
-  const fill = node.attribute("fill").trim() || "white";
-  const borderColor = node.attribute("bordercolor").trim() || "black";
-  const borderWidthRaw = node.attribute("borderwidth").trim();
-  const borderWidth = borderWidthRaw === "" ? 1 : Math.max(0, Number(borderWidthRaw) || 1);
-  const borderStyle = edgeBorderStyle(node.attribute("borderstyle"));
-
-  const textColor = node.attribute("color").trim() || "black";
-  const font = node.attribute("font").trim();
-  const fontSizeRaw = node.attribute("fontsize").trim();
-  const fontSize = fontSizeRaw === "" ? "" : `${fontSizeRaw}px`;
-
-  let style = `background: ${fill}; color: ${textColor};`;
-  if (shape !== "none" && shape !== "point") {
-    style += ` border: ${borderStyle} ${borderWidth}px ${borderColor};`;
-  } else {
-    style += " border: none;";
-  }
-  if (font) style += ` font-family: ${font};`;
-  if (fontSize) style += ` font-size: ${fontSize};`;
-
-  return `<div style="${style}">${content}</div>`;
-}
-
-function edgeCellHtml(cell: EdgeCell): string {
-  const base = cell.type & EDGE_TYPE_MASK;
-  const edge = cell.edge;
-  const styleName = edge.attribute("style").trim().toLowerCase();
-  if (styleName === "invisible") return "";
-
-  const borderStyle = edgeBorderStyle(styleName);
-  const color = edge.attribute("color").trim() || "#000000";
-  const widthRaw = edge.attribute("borderwidth").trim();
-  const width = widthRaw === "" ? 2 : Math.max(1, Number(widthRaw) || 2);
-
-  const con = edgeConnections(base);
-  let style = "";
-  const hasH = con.e || con.w;
-  const hasV = con.n || con.s;
-  if (hasH) style += `border-bottom: ${borderStyle} ${width}px ${color};`;
-  if (hasV) style += `border-left: ${borderStyle} ${width}px ${color};`;
-
-  let content = "&nbsp;";
-  if ((cell.type & EDGE_LABEL_CELL) !== 0) {
-    const label = edge.labelText();
-    const align = edge.attribute("align") || "center";
-    const labelColor = edge.attribute("labelcolor").trim() || color;
-    const font = edge.attribute("font").trim();
-    const fontSizeRaw = edge.attribute("fontsize").trim();
-    const fontSize = fontSizeRaw === "" ? "" : `${fontSizeRaw}px`;
-    let innerStyle = `color: ${labelColor};`;
-    if (font) innerStyle += ` font-family: ${font};`;
-    if (fontSize) innerStyle += ` font-size: ${fontSize};`;
-    content = `<span style="${innerStyle}">${labelToHtml(label, align)}</span>`;
-  } else {
-    const arrows = cell.type & (EDGE_END_N | EDGE_END_S | EDGE_END_E | EDGE_END_W);
-    if (arrows !== 0 && edge.attribute("arrowstyle").trim().toLowerCase() !== "none") {
-      if (arrows & EDGE_END_N) content = arrowForDirection("n");
-      else if (arrows & EDGE_END_S) content = arrowForDirection("s");
-      else if (arrows & EDGE_END_W) content = arrowForDirection("w");
-      else if (arrows & EDGE_END_E) content = arrowForDirection("e");
-    }
-  }
-
-  return `<div style="${style} text-align: center;">${content}</div>`;
-}
-
-function groupCellHtml(cell: GroupCell): string {
-  const group = cell.group;
-  const label = cell.hasLabel ? labelToHtml(cell.label, "left") : "&nbsp;";
-  const fill = group.attribute("fill").trim() || "transparent";
-  const borderColor = group.attribute("bordercolor").trim() || "black";
-  const borderStyle = edgeBorderStyle(group.attribute("borderstyle"));
-  const borderWidthRaw = group.attribute("borderwidth").trim();
-  const borderWidth = borderWidthRaw === "" ? 1 : Math.max(0, Number(borderWidthRaw) || 1);
-
-  const style = `background: ${fill}; border: ${borderStyle} ${borderWidth}px ${borderColor};`;
-  return `<div style="${style}">${label}</div>`;
-}
-
-function cellHtml(cell: Cell | undefined): string {
-  if (!cell) return "";
-  if (cell instanceof Node) return nodeCellHtml(cell);
-  if (cell instanceof EdgeCell) return edgeCellHtml(cell);
-  if (cell instanceof GroupCell) return groupCellHtml(cell);
-  return "";
-}
-
-function cellKey(x: number, y: number): string {
-  return `${x},${y}`;
-}
-
 function computeBounds(cells: Map<string, Cell>): { minX: number; maxX: number; minY: number; maxY: number } {
   let minX = Infinity;
   let minY = Infinity;
@@ -291,51 +272,200 @@ function computeBounds(cells: Map<string, Cell>): { minX: number; maxX: number; 
   return { minX, minY, maxX, maxY };
 }
 
+function nodeCellTd(graph: Graph, node: Node): string {
+  const cx = (node.cx ?? 1) * SUB;
+  const cy = (node.cy ?? 1) * SUB;
+
+  const shape = node.attribute("shape").trim().toLowerCase();
+  const align = node.attribute("align") || "center";
+  const labelRaw = expandEscapes(node.labelText(), graph, { node }, false);
+  const label = labelToHtml(labelRaw, align);
+  const title = resolveTitleForNode(graph, node);
+  const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+
+  const fill = node.attribute("fill").trim() || "white";
+  const borderColor = node.attribute("bordercolor").trim() || "black";
+  const borderWidthRaw = node.attribute("borderwidth").trim();
+  const borderWidth = borderWidthRaw === "" ? 1 : Math.max(0, Number(borderWidthRaw) || 1);
+  const borderStyle = edgeBorderStyle(node.attribute("borderstyle"));
+
+  const textColor = node.rawAttribute("color")?.trim() || "";
+  const font = node.attribute("font").trim();
+  const fontSizeRaw = node.attribute("fontsize").trim();
+  const textStyle = node.attribute("textstyle");
+
+  let style = `background: ${fill};`;
+  if (textColor) style += ` color: ${textColor};`;
+  if (shape !== "none" && shape !== "point" && shape !== "invisible") {
+    style += ` border: ${borderStyle} ${borderWidth}px ${borderColor};`;
+  } else {
+    style += " border: none;";
+  }
+  const labelStyle = textStyleFromAttributes(textColor, font, fontSizeRaw, textStyle);
+  if (shape === "invisible") {
+    style = "border: none; background: inherit;";
+  }
+
+  let content = label;
+  const link = resolveLinkForNode(node);
+  if (link) {
+    const aStyle = labelStyle ? ` style="${labelStyle}"` : "";
+    content = `<a href="${escapeHtml(link)}"${aStyle}>${label}</a>`;
+  } else if (labelStyle) {
+    style += ` ${labelStyle}`;
+  }
+
+  return `<td colspan="${cx}" rowspan="${cy}" class="node" style="${style}"${titleAttr}>${content}</td>`;
+}
+
+function groupSubcellTd(cell: GroupCell, subX: number, subY: number): string {
+  const group = cell.group;
+  const fill = group.attribute("fill").trim();
+  const borderColor = group.attribute("bordercolor").trim() || "black";
+  const borderStyle = edgeBorderStyle(group.attribute("borderstyle"));
+  const borderWidthRaw = group.attribute("borderwidth").trim();
+  const borderWidth = borderWidthRaw === "" ? 1 : Math.max(0, Number(borderWidthRaw) || 1);
+
+  const cls = cell.cellClass;
+  const hasTop = cls.includes("gt") || cls.includes("ga");
+  const hasBottom = cls.includes("gb") || cls.includes("ga");
+  const hasLeft = cls.includes("gl") || cls.includes("ga");
+  const hasRight = cls.includes("gr") || cls.includes("ga");
+
+  let style = "";
+  if (fill) style += `background: ${fill};`;
+  if (hasTop && subY === 0) style += `border-top: ${borderStyle} ${borderWidth}px ${borderColor};`;
+  if (hasBottom && subY === SUB - 1) style += `border-bottom: ${borderStyle} ${borderWidth}px ${borderColor};`;
+  if (hasLeft && subX === 0) style += `border-left: ${borderStyle} ${borderWidth}px ${borderColor};`;
+  if (hasRight && subX === SUB - 1) style += `border-right: ${borderStyle} ${borderWidth}px ${borderColor};`;
+
+  let content = "&nbsp;";
+  if (cell.hasLabel && subX === 1 && subY === 1) {
+    content = labelToHtml(cell.label, "left");
+  }
+
+  return `<td class="group" style="${style}">${content}</td>`;
+}
+
+function edgeSubcellTd(graph: Graph, cell: EdgeCell, subX: number, subY: number): string {
+  const edge = cell.edge;
+  const styleName = edge.attribute("style").trim().toLowerCase();
+  if (styleName === "invisible") {
+    return `<td class="edge">&nbsp;</td>`;
+  }
+
+  const borderStyle = edgeBorderStyle(styleName);
+  const color = edge.attribute("color").trim() || "#000000";
+  const widthRaw = edge.attribute("borderwidth").trim();
+  const width = widthRaw === "" ? 2 : Math.max(1, Number(widthRaw) || 2);
+
+  const base = cell.type & EDGE_TYPE_MASK;
+  const con = edgeConnections(base);
+  const hasH = con.e || con.w;
+  const hasV = con.n || con.s;
+
+  let style = "";
+  if (hasH && subY === 1) style += `border-bottom: ${borderStyle} ${width}px ${color};`;
+  if (hasV && subX === 1) style += `border-left: ${borderStyle} ${width}px ${color};`;
+
+  let content = "&nbsp;";
+
+  const arrows = cell.type & (EDGE_END_N | EDGE_END_S | EDGE_END_E | EDGE_END_W);
+  const arrowStyle = edge.attribute("arrowstyle").trim().toLowerCase();
+
+  if (arrowStyle !== "none" && arrows !== 0) {
+    if ((arrows & EDGE_END_E) !== 0 && subX === SUB - 1 && subY === 1) content = "&gt;";
+    else if ((arrows & EDGE_END_W) !== 0 && subX === 0 && subY === 1) content = "&lt;";
+    else if ((arrows & EDGE_END_N) !== 0 && subX === 1 && subY === 0) content = "^";
+    else if ((arrows & EDGE_END_S) !== 0 && subX === 1 && subY === SUB - 1) content = "v";
+  }
+
+  const title = resolveTitleForEdge(graph, edge);
+  const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+
+  if ((cell.type & EDGE_LABEL_CELL) !== 0 && subX === 1 && subY === 1) {
+    const labelRaw = expandEscapes(edge.labelText(), graph, { edge }, false);
+    const label = labelToHtml(labelRaw, edge.attribute("align") || "center");
+    const labelColor = edge.attribute("labelcolor").trim() || color;
+    const font = edge.attribute("font").trim();
+    const fontSizeRaw = edge.attribute("fontsize").trim();
+    const textStyle = edge.attribute("textstyle");
+    const innerStyle = textStyleFromAttributes(labelColor, font, fontSizeRaw, textStyle);
+    const link = resolveLinkForEdge(edge);
+    const inner = innerStyle ? ` style="${innerStyle}"` : "";
+    const span = `<span${inner}>${label}</span>`;
+    content = link ? `<a href="${escapeHtml(link)}"${inner}>${label}</a>` : span;
+  }
+
+  return `<td class="edge" style="${style}"${titleAttr}>${content}</td>`;
+}
+
+function markSpan(occupied: Set<string>, sx: number, sy: number, w: number, h: number): void {
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      occupied.add(`${sx + dx},${sy + dy}`);
+    }
+  }
+}
+
 export function renderHtml(graph: Graph): string {
   if (!graph.cells) graph.layout();
-  const cells = graph.cells;
+  const cells = graph.cells as Map<string, Cell> | undefined;
   if (!cells || cells.size === 0) {
     return `<table class="graph-easy" style="border-collapse: collapse;"></table>\n`;
   }
 
-  const { minX, maxX, minY, maxY } = computeBounds(cells as Map<string, Cell>);
+  const { minX, maxX, minY, maxY } = computeBounds(cells);
   if (maxX < minX || maxY < minY) {
     return `<table class="graph-easy" style="border-collapse: collapse;"></table>\n`;
   }
 
-  const skipped = new Set<string>();
+  const subCols = (maxX - minX + 1) * SUB;
+  const subRows = (maxY - minY + 1) * SUB;
+
+  const occupied = new Set<string>();
   const rows: string[] = [];
 
-  for (let y = minY; y <= maxY; y++) {
-    const cols: string[] = [];
-    for (let x = minX; x <= maxX; x++) {
-      const key = cellKey(x, y);
-      if (skipped.has(key)) continue;
+  for (let sy = 0; sy < subRows; sy++) {
+    const row: string[] = [];
+    for (let sx = 0; sx < subCols; sx++) {
+      const key = `${sx},${sy}`;
+      if (occupied.has(key)) continue;
 
-      const cell = cells.get(key) as Cell | undefined;
-      if (cell instanceof NodeCell || cell instanceof EdgeCellEmpty) {
-        cols.push('<td style="padding:0;"></td>');
+      const baseX = Math.floor(sx / SUB) + minX;
+      const baseY = Math.floor(sy / SUB) + minY;
+      const cell = cells.get(`${baseX},${baseY}`);
+
+      const subX = sx % SUB;
+      const subY = sy % SUB;
+
+      if (cell instanceof Node) {
+        if (subX !== 0 || subY !== 0) continue;
+        const cx = (cell.cx ?? 1) * SUB;
+        const cy = (cell.cy ?? 1) * SUB;
+        markSpan(occupied, sx, sy, cx, cy);
+        row.push(nodeCellTd(graph, cell));
         continue;
       }
 
-      const { cx, cy } = cell ? cellSpan(cell) : { cx: 1, cy: 1 };
-      if (cell && (cx > 1 || cy > 1)) {
-        for (let dy = 0; dy < cy; dy++) {
-          for (let dx = 0; dx < cx; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            skipped.add(cellKey(x + dx, y + dy));
-          }
-        }
+      if (cell instanceof EdgeCell) {
+        row.push(edgeSubcellTd(graph, cell, subX, subY));
+        continue;
       }
 
-      const content = cellHtml(cell);
-      const spanAttrs: string[] = [];
-      if (cell && cx > 1) spanAttrs.push(`colspan="${cx}"`);
-      if (cell && cy > 1) spanAttrs.push(`rowspan="${cy}"`);
+      if (cell instanceof GroupCell) {
+        row.push(groupSubcellTd(cell, subX, subY));
+        continue;
+      }
 
-      cols.push(`<td ${spanAttrs.join(" ")} style="padding:0;">${content || "&nbsp;"}</td>`);
+      if (cell instanceof NodeCell || cell instanceof EdgeCellEmpty) {
+        row.push(`<td class="empty">&nbsp;</td>`);
+        continue;
+      }
+
+      row.push(`<td class="empty">&nbsp;</td>`);
     }
-    rows.push(`<tr>${cols.join("")}</tr>`);
+    rows.push(`<tr>${row.join("")}</tr>`);
   }
 
   const css = [
