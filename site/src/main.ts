@@ -5,20 +5,10 @@ import { instance as vizInstance, type Viz } from "@viz-js/viz";
 
 const EXAMPLE = String.raw`# graph-easy-ts (TypeScript port) — rough module map
 
-# Entry points
-[ site/src/main.ts ] --> { label: imports } [ src/parser.ts ]
-[ src/index.ts ] --> { label: exports } [ src/parser.ts ]
-[ src/index.ts ] --> { label: exports } [ src/graph.ts ]
-
 # Core pipeline
 [ src/parser.ts ] --> { label: fromText() } [ src/graph.ts ]
 [ src/graph.ts ] --> { label: layout() } [ src/layout/layout.ts ]
 
-# Layout engine (simplified)
-[ src/layout/layout.ts ] --> [ src/layout/scout.ts ]
-[ src/layout/layout.ts ] --> [ src/layout/repair.ts ]
-[ src/layout/layout.ts ] --> [ src/layout/chain.ts ]
-[ src/layout/layout.ts ] --> [ src/layout/heap.ts ]
 
 # Graph model
 [ src/graph.ts ] --> { label: owns } [ src/node.ts ]
