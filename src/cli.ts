@@ -498,7 +498,7 @@ function main(): void {
     if (as === "ascii") out = graph.asAscii();
     else if (as === "boxart") out = graph.asBoxart();
     else if (as === "txt") out = graph.asTxt();
-    else if (as === "html") out = graph.asHtml();
+    else if (as === "html") out = graph.asHtmlFile();
     else if (as === "graphml") out = graph.asGraphml();
     else if (as === "svg") out = graph.asSvg();
     else if (as === "vcg" || as === "gdl") out = graph.asVcg(as);

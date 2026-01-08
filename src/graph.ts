@@ -10,7 +10,7 @@ import type { NodeCell } from "./layout/nodeCell";
 import { renderAscii, renderBoxart } from "./ascii";
 import { renderTxt } from "./txt.js";
 import { renderGraphviz } from "./graphviz.js";
-import { renderHtml } from "./html.js";
+import { renderHtml, renderHtmlFile } from "./html.js";
 import { renderGraphml } from "./graphml.js";
 import { renderSvg } from "./svg.js";
 import { renderVcg } from "./vcg.js";
@@ -89,6 +89,14 @@ export class Graph {
 
   public readonly edges: Edge[] = [];
   public readonly groups: Group[] = [];
+
+  public constructor() {
+    // Graph::Easy defaults for groups (see Attributes.pm).
+    this.defaultGroupAttributes.fill = "#a0d0ff";
+    this.defaultGroupAttributes.borderstyle = "dashed";
+    this.defaultGroupAttributes.bordercolor = "#000000";
+    this.defaultGroupAttributes.borderwidth = "1";
+  }
 
   // The laid out grid cells (keyed by "x,y" in grid coordinates).
   public cells: Map<string, Node | EdgeCell | NodeCell | GroupCell | EdgeCellEmpty> | undefined;
@@ -322,6 +330,10 @@ export class Graph {
 
   public asHtml(): string {
     return renderHtml(this);
+  }
+
+  public asHtmlFile(): string {
+    return renderHtmlFile(this);
   }
 
   public asGraphml(): string {
