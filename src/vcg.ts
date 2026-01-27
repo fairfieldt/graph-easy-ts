@@ -1,6 +1,6 @@
-import type { Graph } from "./graph";
-import type { Edge } from "./edge";
-import type { Node } from "./node";
+import type { Graph } from "./graph.js";
+import type { Edge } from "./edge.js";
+import type { Node } from "./node.js";
 
 function escapeVcg(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');

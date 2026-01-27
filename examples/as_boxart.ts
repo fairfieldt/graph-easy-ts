@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 
-import { Parser } from "../src/parser";
+import { Parser } from "../src/parser.js";
 
 function readStdinUtf8(): string {
   // FD 0 is stdin.

@@ -1,5 +1,5 @@
-import type { Group } from "../group";
-import type { Node } from "../node";
+import type { Group } from "../group.js";
+import type { Node } from "../node.js";
 
 export class NodeCell {
   public constructor(

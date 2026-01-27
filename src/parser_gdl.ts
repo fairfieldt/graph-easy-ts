@@ -1,5 +1,5 @@
-import { Graph } from "./graph";
-import type { Attributes } from "./attributes";
+import { Graph } from "./graph.js";
+import type { Attributes } from "./attributes.js";
 
 type Token = { type: "punct"; value: string } | { type: "id"; value: string } | { type: "string"; value: string };
 

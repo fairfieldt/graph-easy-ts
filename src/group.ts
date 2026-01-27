@@ -1,10 +1,10 @@
-import { mergeAttributes, type Attributes } from "./attributes";
+import { mergeAttributes, type Attributes } from "./attributes.js";
 
-import { validateGroupAttributes } from "./validate";
+import { validateGroupAttributes } from "./validate.js";
 
-import type { Graph } from "./graph";
-import type { Node } from "./node";
-import type { GroupCell } from "./layout/groupCell";
+import type { Graph } from "./graph.js";
+import type { Node } from "./node.js";
+import type { GroupCell } from "./layout/groupCell.js";
 
 export class Group {
   public readonly attributes: Attributes = Object.create(null);

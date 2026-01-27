@@ -1,5 +1,5 @@
-import type { Edge } from "../edge";
-import type { Group } from "../group";
+import type { Edge } from "../edge.js";
+import type { Group } from "../group.js";
 
 import {
   EDGE_CROSS,
@@ -8,7 +8,7 @@ import {
   EDGE_TYPE_MASK,
   EDGE_VER,
   EDGE_HOR,
-} from "./edgeCellTypes";
+} from "./edgeCellTypes.js";
 
 export class EdgeCell {
   public w: number | undefined;

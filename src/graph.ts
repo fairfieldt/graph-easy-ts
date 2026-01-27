@@ -1,13 +1,13 @@
-import { mergeAttributes, type Attributes } from "./attributes";
-import { Edge } from "./edge";
-import { Group } from "./group";
-import { Node, type FlowDirection } from "./node";
-import type { EdgeCell } from "./layout/edgeCell";
-import type { EdgeCellEmpty } from "./layout/edgeCellEmpty";
-import type { GroupCell } from "./layout/groupCell";
-import type { NodeCell } from "./layout/nodeCell";
+import { mergeAttributes, type Attributes } from "./attributes.js";
+import { Edge } from "./edge.js";
+import { Group } from "./group.js";
+import { Node, type FlowDirection } from "./node.js";
+import type { EdgeCell } from "./layout/edgeCell.js";
+import type { EdgeCellEmpty } from "./layout/edgeCellEmpty.js";
+import type { GroupCell } from "./layout/groupCell.js";
+import type { NodeCell } from "./layout/nodeCell.js";
 
-import { renderAscii, renderBoxart } from "./ascii";
+import { renderAscii, renderBoxart } from "./ascii.js";
 import { renderTxt } from "./txt.js";
 import { renderGraphviz } from "./graphviz.js";
 import { renderHtml, renderHtmlFile } from "./html.js";
@@ -15,11 +15,11 @@ import { renderGraphml } from "./graphml.js";
 import { renderSvg } from "./svg.js";
 import { renderVcg } from "./vcg.js";
 
-import { validateGroupAttributes } from "./validate";
+import { validateGroupAttributes } from "./validate.js";
 
-import { layoutGraph } from "./layout/layout";
+import { layoutGraph } from "./layout/layout.js";
 
-import type { LayoutAction } from "./layout/chain";
+import type { LayoutAction } from "./layout/chain.js";
 
 function inferEdgeStyleFromOperators(leftOp: string, rightOp: string): string {
   // Graph::Easy encodes the edge line style directly in the operator token.

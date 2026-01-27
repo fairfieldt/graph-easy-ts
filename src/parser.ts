@@ -17,13 +17,13 @@ function requireNodePath(): NodePath {
   return require("pa" + "th") as NodePath;
 }
 
-import { parseAttributesBlock, type Attributes } from "./attributes";
-import { Graph } from "./graph";
-import { Group } from "./group";
-import type { Edge } from "./edge";
-import type { Node } from "./node";
-import { parseDot } from "./parser_dot";
-import { parseGdl } from "./parser_gdl";
+import { parseAttributesBlock, type Attributes } from "./attributes.js";
+import { Graph } from "./graph.js";
+import { Group } from "./group.js";
+import type { Edge } from "./edge.js";
+import type { Node } from "./node.js";
+import { parseDot } from "./parser_dot.js";
+import { parseGdl } from "./parser_gdl.js";
 
 type ParseBlock = {
   blockText: string;

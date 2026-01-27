@@ -1,8 +1,8 @@
-import type { Edge } from "../edge";
-import type { Graph } from "../graph";
-import type { Node } from "../node";
+import type { Edge } from "../edge.js";
+import type { Graph } from "../graph.js";
+import type { Node } from "../node.js";
 
-import { ACTION_CHAIN, ACTION_NODE, ACTION_TRACE } from "./actionTypes";
+import { ACTION_CHAIN, ACTION_NODE, ACTION_TRACE } from "./actionTypes.js";
 
 export type LayoutAction = readonly [number, ...unknown[]];
 

@@ -1,7 +1,7 @@
-import { Graph } from "./graph";
-import { Group } from "./group";
-import type { Attributes } from "./attributes";
-import type { Node } from "./node";
+import { Graph } from "./graph.js";
+import { Group } from "./group.js";
+import type { Attributes } from "./attributes.js";
+import type { Node } from "./node.js";
 
 type Token =
   | { type: "punct"; value: string }

@@ -1,9 +1,9 @@
-import { mergeAttributes, type Attributes } from "./attributes";
+import { mergeAttributes, type Attributes } from "./attributes.js";
 
-import type { Graph } from "./graph";
-import type { Group } from "./group";
-import type { FlowDirection, Node } from "./node";
-import type { EdgeCell } from "./layout/edgeCell";
+import type { Graph } from "./graph.js";
+import type { Group } from "./group.js";
+import type { FlowDirection, Node } from "./node.js";
+import type { EdgeCell } from "./layout/edgeCell.js";
 
 // Port parsing helpers (ported from Graph::Easy 0.76).
 

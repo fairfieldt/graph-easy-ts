@@ -1,5 +1,5 @@
-export { Edge } from "./edge";
-export { Graph } from "./graph";
-export { Group } from "./group";
-export { Node } from "./node";
-export { Parser } from "./parser";
+export { Edge } from "./edge.js";
+export { Graph } from "./graph.js";
+export { Group } from "./group.js";
+export { Node } from "./node.js";
+export { Parser } from "./parser.js";

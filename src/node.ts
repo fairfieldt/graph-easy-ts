@@ -1,11 +1,11 @@
-import { mergeAttributes, type Attributes } from "./attributes";
+import { mergeAttributes, type Attributes } from "./attributes.js";
 
-import { EDGE_END_E, EDGE_END_N, EDGE_END_S, EDGE_END_W } from "./layout/edgeCellTypes";
+import { EDGE_END_E, EDGE_END_N, EDGE_END_S, EDGE_END_W } from "./layout/edgeCellTypes.js";
 
-import type { Edge } from "./edge";
-import type { Graph } from "./graph";
-import type { Group } from "./group";
-import type { LayoutChain } from "./layout/chain";
+import type { Edge } from "./edge.js";
+import type { Graph } from "./graph.js";
+import type { Group } from "./group.js";
+import type { LayoutChain } from "./layout/chain.js";
 
 export type FlowDirection = 0 | 90 | 180 | 270;
 

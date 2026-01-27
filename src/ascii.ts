@@ -1,10 +1,10 @@
-import type { Edge } from "./edge";
-import type { Graph } from "./graph";
+import type { Edge } from "./edge.js";
+import type { Graph } from "./graph.js";
 
-import { EdgeCell } from "./layout/edgeCell";
-import { EdgeCellEmpty } from "./layout/edgeCellEmpty";
-import { GroupCell } from "./layout/groupCell";
-import { NodeCell } from "./layout/nodeCell";
+import { EdgeCell } from "./layout/edgeCell.js";
+import { EdgeCellEmpty } from "./layout/edgeCellEmpty.js";
+import { GroupCell } from "./layout/groupCell.js";
+import { NodeCell } from "./layout/nodeCell.js";
 import {
   ARROW_DOWN,
   ARROW_LEFT,
@@ -42,8 +42,8 @@ import {
   EDGE_VER,
   EDGE_W_N_S,
   EDGE_W_S_E,
-} from "./layout/edgeCellTypes";
-import { Node } from "./node";
+} from "./layout/edgeCellTypes.js";
+import { Node } from "./node.js";
 
 type CellMap = Map<string, Node | EdgeCell | NodeCell | GroupCell | EdgeCellEmpty>;
 

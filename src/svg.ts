@@ -1,8 +1,8 @@
-import type { Graph } from "./graph";
-import type { Edge } from "./edge";
-import { EdgeCell } from "./layout/edgeCell";
-import { GroupCell } from "./layout/groupCell";
-import { Node } from "./node";
+import type { Graph } from "./graph.js";
+import type { Edge } from "./edge.js";
+import { EdgeCell } from "./layout/edgeCell.js";
+import { GroupCell } from "./layout/groupCell.js";
+import { Node } from "./node.js";
 import {
   EDGE_CROSS,
   EDGE_E_N_S,
@@ -25,7 +25,7 @@ import {
   EDGE_VER,
   EDGE_W_N_S,
   EDGE_W_S_E,
-} from "./layout/edgeCellTypes";
+} from "./layout/edgeCellTypes.js";
 
 type AlignChar = "l" | "r" | "c";
 

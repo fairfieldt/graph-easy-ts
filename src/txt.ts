@@ -1,8 +1,8 @@
-import type { Attributes } from "./attributes";
-import type { Edge } from "./edge";
-import type { Graph } from "./graph";
-import type { Group } from "./group";
-import type { Node } from "./node";
+import type { Attributes } from "./attributes.js";
+import type { Edge } from "./edge.js";
+import type { Graph } from "./graph.js";
+import type { Group } from "./group.js";
+import type { Node } from "./node.js";
 
 function cmpStr(a: string, b: string): number {
   if (a < b) return -1;

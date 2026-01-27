@@ -3,11 +3,12 @@
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { Parser } from "./parser";
-import { parseDot } from "./parser_dot";
-import { parseGdl } from "./parser_gdl";
-import type { Graph } from "./graph";
+import { Parser } from "./parser.js";
+import { parseDot } from "./parser_dot.js";
+import { parseGdl } from "./parser_gdl.js";
+import type { Graph } from "./graph.js";
 
 type Options = {
   input?: string;
@@ -79,7 +80,7 @@ Format shortcuts:
 }
 
 function printVersion(): void {
-  const pkgPath = path.resolve(__dirname, "../../package.json");
+  const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../package.json");
   let version = "unknown";
   try {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
@@ -87,7 +88,7 @@ function printVersion(): void {
   } catch {
     // Best-effort version output.
   }
-  process.stdout.write(`graph-easy-ts ${version} (port of Graph::Easy 0.76)\n`);
+  process.stdout.write(`graph-easy ${version} (port of Graph::Easy 0.76)\n`);
 }
 
 function warn(msg: string): void {

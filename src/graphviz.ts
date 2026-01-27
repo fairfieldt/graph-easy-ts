@@ -1,7 +1,7 @@
-import type { Edge } from "./edge";
-import type { Graph } from "./graph";
-import type { Group } from "./group";
-import type { Node } from "./node";
+import type { Edge } from "./edge.js";
+import type { Graph } from "./graph.js";
+import type { Group } from "./group.js";
+import type { Node } from "./node.js";
 
 const GRAPH_EASY_VERSION_FOR_BANNER = "0.76";
 

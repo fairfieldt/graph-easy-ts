@@ -1,6 +1,6 @@
-import type { Attributes } from "./attributes";
+import type { Attributes } from "./attributes.js";
 
-import { CSS_COLOR_NAMES } from "./colors";
+import { CSS_COLOR_NAMES } from "./colors.js";
 
 function normalizeColorToken(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, "");

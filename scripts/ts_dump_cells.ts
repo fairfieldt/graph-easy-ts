@@ -1,14 +1,14 @@
-import { Parser } from '../src/parser';
-import { Graph } from '../src/graph';
-import { Node } from '../src/node';
-import { EdgeCell } from '../src/layout/edgeCell';
-import { EdgeCellEmpty } from '../src/layout/edgeCellEmpty';
-import { GroupCell } from '../src/layout/groupCell';
-import { NodeCell } from '../src/layout/nodeCell';
+import { Parser } from '../src/parser.js';
+import { Graph } from '../src/graph.js';
+import { Node } from '../src/node.js';
+import { EdgeCell } from '../src/layout/edgeCell.js';
+import { EdgeCellEmpty } from '../src/layout/edgeCellEmpty.js';
+import { GroupCell } from '../src/layout/groupCell.js';
+import { NodeCell } from '../src/layout/nodeCell.js';
 import {
   EDGE_FLAG_MASK,
   EDGE_TYPE_MASK,
-} from '../src/layout/edgeCellTypes';
+} from '../src/layout/edgeCellTypes.js';
 
 function keyToXY(key: string): { x: number; y: number } {
   const [xs, ys] = key.split(',');

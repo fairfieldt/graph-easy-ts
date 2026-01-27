@@ -1,7 +1,7 @@
-import { EdgeCell } from "./edgeCell";
-import { EdgeCellEmpty } from "./edgeCellEmpty";
-import { GroupCell } from "./groupCell";
-import { NodeCell } from "./nodeCell";
+import { EdgeCell } from "./edgeCell.js";
+import { EdgeCellEmpty } from "./edgeCellEmpty.js";
+import { GroupCell } from "./groupCell.js";
+import { NodeCell } from "./nodeCell.js";
 import {
   EDGE_CROSS,
   EDGE_END_E,
@@ -18,12 +18,12 @@ import {
   EDGE_START_W,
   EDGE_TYPE_MASK,
   EDGE_VER,
-} from "./edgeCellTypes";
+} from "./edgeCellTypes.js";
 
-import type { Group } from "../group";
-import { Node } from "../node";
-import type { Edge } from "../edge";
-import type { Graph } from "../graph";
+import type { Group } from "../group.js";
+import { Node } from "../node.js";
+import type { Edge } from "../edge.js";
+import type { Graph } from "../graph.js";
 
 type Cell = Node | EdgeCell | NodeCell | GroupCell | EdgeCellEmpty;
 export type CellMap = Map<string, Cell>;

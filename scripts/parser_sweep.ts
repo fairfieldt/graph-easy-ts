@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { Parser } from "../src/parser";
+import { Parser } from "../src/parser.js";
 
 type SweepResult = {
   ok: number;

@@ -1,8 +1,8 @@
-import { EdgeCell } from "./edgeCell";
-import { EdgeCellEmpty } from "./edgeCellEmpty";
-import { GroupCell } from "./groupCell";
-import { NodeCell } from "./nodeCell";
-import { fillGroupCells } from "./repair";
+import { EdgeCell } from "./edgeCell.js";
+import { EdgeCellEmpty } from "./edgeCellEmpty.js";
+import { GroupCell } from "./groupCell.js";
+import { NodeCell } from "./nodeCell.js";
+import { fillGroupCells } from "./repair.js";
 import {
   EDGE_CROSS,
   EDGE_END_MASK,
@@ -37,18 +37,18 @@ import {
   EDGE_START_W,
   EDGE_TYPE_MASK,
   EDGE_VER,
-} from "./edgeCellTypes";
+} from "./edgeCellTypes.js";
 
-import { applyEndPoints, astarEdgeType, directionSign, type Direction } from "./scout";
+import { applyEndPoints, astarEdgeType, directionSign, type Direction } from "./scout.js";
 
-import { Heap } from "./heap";
+import { Heap } from "./heap.js";
 
-import { LayoutChain, type LayoutAction } from "./chain";
-import { ACTION_CHAIN, ACTION_NODE, ACTION_SPLICE, ACTION_TRACE } from "./actionTypes";
+import { LayoutChain, type LayoutAction } from "./chain.js";
+import { ACTION_CHAIN, ACTION_NODE, ACTION_SPLICE, ACTION_TRACE } from "./actionTypes.js";
 
-import type { Edge } from "../edge";
-import type { Graph } from "../graph";
-import { Node, type FlowDirection } from "../node";
+import type { Edge } from "../edge.js";
+import type { Graph } from "../graph.js";
+import { Node, type FlowDirection } from "../node.js";
 
 type CellMap = Map<string, Node | EdgeCell | NodeCell | GroupCell | EdgeCellEmpty>;
 

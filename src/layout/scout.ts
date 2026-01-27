@@ -1,4 +1,4 @@
-import type { Edge } from "../edge";
+import type { Edge } from "../edge.js";
 
 import {
   EDGE_E_S_W,
@@ -20,7 +20,7 @@ import {
   EDGE_TYPE_MASK,
   EDGE_VER,
   EDGE_W_S_E,
-} from "./edgeCellTypes";
+} from "./edgeCellTypes.js";
 
 // Ported from Graph::Easy::Layout::Scout (Graph-Easy 0.76).
 // These helpers compute the EDGE_START_* / EDGE_END_* flags for a traced path.
